@@ -1,11 +1,16 @@
 package program
 
-import "image/color"
+import (
+	_ "embed"
+	"image/color"
+)
 
 //go:embed mandelbrot.glsl
 var mandelbrot string
 
-var _ Program = Mandelbrot{}
+func init() {
+	RegisterProgram(Mandelbrot{})
+}
 
 type Mandelbrot struct{}
 
