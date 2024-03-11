@@ -1,11 +1,11 @@
-package program
+package programs
 
 import (
 	_ "embed"
 	"image/color"
 )
 
-//go:embed mandelbrot.glsl
+//go:embed mandelbrot.frag
 var mandelbrot string
 
 func init() {
@@ -22,6 +22,6 @@ func (m Mandelbrot) Name() string {
 	return "Mandelbrot"
 }
 
-func (m Mandelbrot) Shader() string {
+func (m Mandelbrot) FragmentShader() string {
 	return mandelbrot
 }

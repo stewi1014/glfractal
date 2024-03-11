@@ -1,4 +1,4 @@
-package program
+package programs
 
 import "github.com/go-gl/mathgl/mgl64"
 

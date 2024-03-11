@@ -6,85 +6,56 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"sync"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
+const debug = true
+
 func main() {
-	mainContext, mainQuit := context.WithCancel(context.Background())
-
-	startup := new(sync.WaitGroup)
-	startup.Add(2)
+	mainContext, mainQuit := context.WithCancelCause(context.Background())
 
 	go func() {
-		err := gtkMain(mainContext, startup)
-		if err != nil {
-			log.Println("gtkMain failed: ", err)
-		}
-		mainQuit()
-	}()
-
-	go func() {
-		err := glfwMain(mainContext, startup)
-		if err != nil {
-			log.Println("glfwMain failed:", err)
-		}
-		mainQuit()
+		mainQuit(gtkMain(mainContext))
 	}()
 
 	<-mainContext.Done()
+	if err := context.Cause(mainContext); err != nil {
+		log.Println(err)
+	}
 }
 
-func gtkMain(ctx context.Context, startup *sync.WaitGroup) error {
+func gtkMain(ctx context.Context) error {
 	runtime.LockOSThread()
 
 	gtk.Init(&os.Args)
-
-	app, err := NewConfigurationWindow()
+	app, err := gtk.ApplicationNew("com.github.stewi1014.glfractal", glib.APPLICATION_FLAGS_NONE)
 	if err != nil {
-		return fmt.Errorf("NewApplication failed: %w", err)
+		return fmt.Errorf("gtk.ApplicationNew failed: %w", err)
 	}
 
+	appContext, appQuit := context.WithCancelCause(ctx)
+	app.Connect("activate", func() {
+		client, listener := NewPipeListener()
+
+		configWindow := NewConfigWindow(app, listener, appQuit)
+		configWindow.Connect("destroy", func() {
+			appQuit(nil)
+		})
+		configWindow.SetTitle("GLFractal Config")
+
+		renderWindow := NewRenderWindow(app, client, appQuit)
+		renderWindow.Connect("destroy", func() {
+			appQuit(nil)
+		})
+		renderWindow.SetTitle("GLFractal Render")
+	})
+
 	go func() {
-		<-ctx.Done()
+		<-appContext.Done()
 		app.Quit()
 	}()
-	startup.Done()
-	startup.Wait()
 	app.Run(nil)
-	return nil
-}
-
-func glfwMain(ctx context.Context, startup *sync.WaitGroup) error {
-	runtime.LockOSThread()
-
-	err := glfw.Init()
-	if err != nil {
-		return fmt.Errorf("glfw.Init failed: %w", err)
-	}
-	defer glfw.Terminate()
-
-	monitor := glfw.GetPrimaryMonitor()
-	window, err := NewRenderWindow(
-		int(float32(monitor.GetVideoMode().Width)*.9),
-		int(float32(monitor.GetVideoMode().Height)*.9),
-	)
-
-	if err != nil {
-		return fmt.Errorf("NewRenderWindow failed: %w", err)
-	}
-
-	go func() {
-		<-ctx.Done()
-		glfw.PostEmptyEvent()
-	}()
-	startup.Done()
-	startup.Wait()
-	for !window.ShouldClose() && ctx.Err() == nil {
-		glfw.WaitEvents()
-	}
-
-	return nil
+	return context.Cause(appContext)
 }

@@ -1,8 +1,10 @@
 #!/bin/bash
 
+name="glfractal"
+
 ### Linux ###
 
-go build .
+go build -v .
 
 ### Windows ###
 
@@ -14,7 +16,7 @@ CGO_ENABLED=1 \
 	CC="x86_64-w64-mingw32-gcc" \
 	GOOS=windows \
 	GOARCH=amd64 \
-	go build -v -o build/glfractal.exe .
+	go build -v -o build/${name}.exe .
 
 rsync /usr/x86_64-w64-mingw32/bin/libcairo-2.dll build/
 rsync /usr/x86_64-w64-mingw32/bin/libcairo-gobject-2.dll build/
@@ -57,4 +59,4 @@ rsync /usr/x86_64-w64-mingw32/bin/libgraphite2.dll build/
 rsync /usr/x86_64-w64-mingw32/bin/libdatrie-1.dll build/
 rsync /usr/x86_64-w64-mingw32/bin/libbrotlicommon.dll build/
 
-zip -jq glfractal.zip build/*
+zip -jq ${name}.zip build/*

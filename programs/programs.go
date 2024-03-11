@@ -1,11 +1,17 @@
-package program
+package programs
 
-import "image/color"
+import (
+	_ "embed"
+	"image/color"
+)
+
+//go:embed default.vert
+var VertexShader string
 
 type Program interface {
 	At(x int, y int) color.Color
 	Name() string
-	Shader() string
+	FragmentShader() string
 }
 
 var programs []Program
