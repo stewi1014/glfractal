@@ -1,73 +1,90 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"os"
 	"runtime"
+	"sync"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/gotk3/gotk3/gtk"
 )
 
-var quitApp func()
-
 func main() {
+	mainContext, mainQuit := context.WithCancel(context.Background())
+
+	startup := new(sync.WaitGroup)
+	startup.Add(2)
+
+	go func() {
+		err := gtkMain(mainContext, startup)
+		if err != nil {
+			log.Println("gtkMain failed: ", err)
+		}
+		mainQuit()
+	}()
+
+	go func() {
+		err := glfwMain(mainContext, startup)
+		if err != nil {
+			log.Println("glfwMain failed:", err)
+		}
+		mainQuit()
+	}()
+
+	<-mainContext.Done()
+}
+
+func gtkMain(ctx context.Context, startup *sync.WaitGroup) error {
 	runtime.LockOSThread()
+
 	gtk.Init(&os.Args)
 
-	app, err := NewApplication()
+	app, err := NewConfigurationWindow()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("NewApplication failed: %w", err)
 	}
 
-	app.Connect("startup", onAppStartup)
-	app.Connect("activate", onAppActivate)
-	quitApp = app.Quit
+	go func() {
+		<-ctx.Done()
+		app.Quit()
+	}()
+	startup.Done()
+	startup.Wait()
 	app.Run(nil)
+	return nil
 }
 
-func onAppStartup(app *gtk.Application) {
-	go glfwMain()
-}
-
-func onAppActivate(app *gtk.Application) {
-	window, err := gtk.ApplicationWindowNew(app)
-	if err != nil {
-		panic(err)
-	}
-
-	window.SetName("GLFractal")
-
-	l, _ := gtk.LabelNew("Colour Pallet")
-
-	window.Add(l)
-	window.ShowAll()
-}
-
-func glfwMain() {
+func glfwMain(ctx context.Context, startup *sync.WaitGroup) error {
 	runtime.LockOSThread()
-	defer quitApp()
 
 	err := glfw.Init()
 	if err != nil {
-		log.Println("glfw.Init failed: ", err)
-		return
+		return fmt.Errorf("glfw.Init failed: %w", err)
 	}
 	defer glfw.Terminate()
 
 	monitor := glfw.GetPrimaryMonitor()
-
 	window, err := NewRenderWindow(
 		int(float32(monitor.GetVideoMode().Width)*.9),
 		int(float32(monitor.GetVideoMode().Height)*.9),
 	)
 
 	if err != nil {
-		log.Println(err)
-		return
+		return fmt.Errorf("NewRenderWindow failed: %w", err)
 	}
 
-	for !window.ShouldClose() {
+	go func() {
+		<-ctx.Done()
+		glfw.PostEmptyEvent()
+	}()
+	startup.Done()
+	startup.Wait()
+	for !window.ShouldClose() && ctx.Err() == nil {
 		glfw.WaitEvents()
 	}
+
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-gl/gl/v4.6-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/gotk3/gotk3/glib"
 )
 
 func NewRenderWindow(width, height int) (*RenderWindow, error) {
@@ -33,6 +34,10 @@ func NewRenderWindow(width, height int) (*RenderWindow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gl.Init failed: %w", err)
 	}
+
+	glib.IdleAdd(func() {
+
+	})
 
 	return w, nil
 }
