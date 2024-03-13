@@ -1,8 +1,12 @@
 package programs
 
-import "github.com/go-gl/mathgl/mgl64"
+import (
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/go-gl/mathgl/mgl64"
+)
 
 type Uniforms struct {
-	zoom float64
-	pos  mgl64.Vec2
+	Zoom   float64
+	Pos    mgl64.Vec2
+	Camera mgl32.Mat4
 }

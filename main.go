@@ -2,16 +2,21 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log"
 	"os"
 	"runtime"
 
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
 const debug = true
+
+//go:embed icon.ico
+var icon []byte
 
 func main() {
 	mainContext, mainQuit := context.WithCancelCause(context.Background())
@@ -35,6 +40,8 @@ func gtkMain(ctx context.Context) error {
 		return fmt.Errorf("gtk.ApplicationNew failed: %w", err)
 	}
 
+	iconPixbuf, _ := gdk.PixbufNewFromBytesOnly(icon)
+
 	appContext, appQuit := context.WithCancelCause(ctx)
 	app.Connect("activate", func() {
 		client, listener := NewPipeListener()
@@ -44,12 +51,14 @@ func gtkMain(ctx context.Context) error {
 			appQuit(nil)
 		})
 		configWindow.SetTitle("GLFractal Config")
+		configWindow.SetIcon(iconPixbuf)
 
 		renderWindow := NewRenderWindow(app, client, appQuit)
 		renderWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})
 		renderWindow.SetTitle("GLFractal Render")
+		renderWindow.SetIcon(iconPixbuf)
 	})
 
 	go func() {
