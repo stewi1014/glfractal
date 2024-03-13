@@ -44,16 +44,16 @@ func gtkMain(ctx context.Context) error {
 
 	appContext, appQuit := context.WithCancelCause(ctx)
 	app.Connect("activate", func() {
-		client, listener := NewPipeListener()
+		client, listener := NewPipeListener(appContext)
 
-		configWindow := NewConfigWindow(app, listener, appQuit)
+		configWindow := NewConfigWindow(app, listener, ctx, appQuit)
 		configWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})
 		configWindow.SetTitle("GLFractal Config")
 		configWindow.SetIcon(iconPixbuf)
 
-		renderWindow := NewRenderWindow(app, client, appQuit)
+		renderWindow := NewRenderWindow(app, client, ctx, appQuit)
 		renderWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})

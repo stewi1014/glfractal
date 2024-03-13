@@ -1,29 +1,40 @@
 package main
 
-import "net"
+import (
+	"context"
+	"net"
+)
 
-func NewPipeListener() (client net.Conn, listener net.Listener) {
+func NewPipeListener(ctx context.Context) (client net.Conn, listener net.Listener) {
 	clientPipe, listenerPipe := net.Pipe()
 	return clientPipe, &pipeListener{
 		pipe: listenerPipe,
-		done: make(chan struct{}),
+		ctx:  ctx,
+		done: ctx.Done(),
 	}
 }
 
 type pipeListener struct {
 	pipe net.Conn
-	done chan struct{}
+	ctx  context.Context
+	done <-chan struct{}
 }
 
 func (p *pipeListener) Accept() (net.Conn, error) {
 	if p.pipe != nil {
-		return p.pipe, nil
+		tmp := p.pipe
+		p.pipe = nil
+		return tmp, nil
 	}
 	<-p.done
 	return nil, net.ErrClosed
 }
 
 func (p *pipeListener) Close() error {
+	if p.pipe == nil {
+		return net.ErrClosed
+	}
+
 	return p.pipe.Close()
 }
 

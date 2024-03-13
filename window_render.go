@@ -1,64 +1,45 @@
 package main
 
+// #cgo pkg-config: gdk-3.0 glib-2.0 gobject-2.0
+// #include <gdk/gdk.h>
+import "C"
+
 import (
+	"context"
+	"encoding/gob"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.6-core/gl"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/go-gl/mathgl/mgl64"
 	"github.com/gotk3/gotk3/gdk"
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
-)
-
-var (
-	typeFloat32   = reflect.TypeOf(float32(0))
-	typeFloat64   = reflect.TypeOf(float64(0))
-	typeInt32     = reflect.TypeOf(int32(0))
-	typeUint32    = reflect.TypeOf(uint32(0))
-	typeMgl32Vec2 = reflect.TypeOf(mgl32.Vec2{})
-	typeMgl32Vec3 = reflect.TypeOf(mgl32.Vec3{})
-	typeMgl32Vec4 = reflect.TypeOf(mgl32.Vec4{})
-	typeMgl64Vec2 = reflect.TypeOf(mgl64.Vec2{})
-	typeMgl64Vec3 = reflect.TypeOf(mgl64.Vec3{})
-	typeMgl64Vec4 = reflect.TypeOf(mgl64.Vec4{})
-	typeMgl32Mat2 = reflect.TypeOf(mgl32.Mat2{})
-	typeMgl32Mat3 = reflect.TypeOf(mgl32.Mat3{})
-	typeMgl32Mat4 = reflect.TypeOf(mgl32.Mat4{})
 )
 
 func NewRenderWindow(
 	app *gtk.Application,
 	conn net.Conn,
+	ctx context.Context,
 	quit func(error),
 ) *RenderWindow {
+	var err error
 	w := &RenderWindow{
-		quit: quit,
+		ctx:          ctx,
+		quit:         quit,
+		sendUniforms: make(chan programs.Uniforms),
 	}
 
-	display, err := gdk.DisplayGetDefault()
-	if err != nil {
-		quit(fmt.Errorf("gdk.DisplayGetDefault %w", err))
-		return nil
-	}
-
-	seat, err := display.GetDefaultSeat()
-	if err != nil {
-		quit(fmt.Errorf("gdk.Display.GetDefaultSeat: %w", err))
-		return nil
-	}
-
-	w.mouse, err = seat.GetPointer()
-	if err != nil {
-		quit(fmt.Errorf("gdk.Seat.GetPointer: %w", err))
-		return nil
-	}
+	go w.handleNet(conn)
 
 	w.ApplicationWindow, err = gtk.ApplicationWindowNew(app)
 	if err != nil {
@@ -66,53 +47,74 @@ func NewRenderWindow(
 		return nil
 	}
 
-	w.SetDefaultSize(getWindowSize(display))
+	w.SetDefaultSize(getWindowSize())
 
-	gla, err := gtk.GLAreaNew()
+	w.gla, err = gtk.GLAreaNew()
 	if err != nil {
 		quit(fmt.Errorf("gtk.GLAreaNew: %w", err))
 		return nil
 	}
 
-	gla.SetRequiredVersion(4, 6)
-	gla.Connect("realize", w.glaRealize)
-	gla.Connect("render", w.glaRender)
-	gla.Connect("unrealize", w.glaUnrealize)
+	w.gla.SetRequiredVersion(4, 6)
+	w.gla.Connect("realize", w.glaRealize)
+	w.gla.Connect("render", w.glaRender)
+	w.gla.Connect("unrealize", w.glaUnrealize)
 
-	gla.Connect("resize", w.resize)
+	w.gla.SetEvents(
+		int(gdk.BUTTON_PRESS_MASK) |
+			int(gdk.BUTTON_RELEASE_MASK) |
+			int(gdk.SCROLL_MASK),
+	)
+	w.gla.Connect("resize", w.resize)
+	w.gla.Connect("scroll-event", w.scroll)
+	w.gla.Connect("button-press-event", w.button)
+	w.gla.Connect("button-release-event", w.button)
 
-	w.Add(gla)
+	w.Add(w.gla)
 	w.ShowAll()
 
 	return w
 }
 
-func getWindowSize(display *gdk.Display) (width, height int) {
-	monitor, err := display.GetPrimaryMonitor()
-	if err == nil {
-		width = int(float32(monitor.GetGeometry().GetWidth()) * .9)
-		height = int(float32(monitor.GetGeometry().GetHeight()) * .9)
-	} else {
-		log.Println("gdk.Display.GetPrimaryMonitor: %w", err)
-		width = 1200
-		height = 800
+func getWindowSize() (width, height int) {
+	width = 1200
+	height = 800
+
+	display, err := gdk.DisplayGetDefault()
+	if err != nil {
+		return
 	}
 
+	monitor, err := display.GetPrimaryMonitor()
+	if err != nil {
+		return
+	}
+
+	width = int(float32(monitor.GetGeometry().GetWidth()) * .6)
+	height = int(float32(monitor.GetGeometry().GetHeight()) * .6)
 	return
 }
 
 type RenderWindow struct {
 	*gtk.ApplicationWindow
-	mouse *gdk.Device
-	quit  func(error)
+	gla           *gtk.GLArea
+	clickingMouse *gdk.Device
+	clickPos      mgl32.Vec2
+	width         int
+	height        int
 
-	vao     uint32
-	vbo     uint32
-	program uint32
+	ctx  context.Context
+	quit func(error)
 
-	uniforms         programs.Uniforms
-	uniformLocations map[string]int32
+	vao              uint32
+	vbo              uint32
+	program          uint32
 	vertexAttrib     uint32
+	uniformLocations map[string]int32
+
+	uniforms      programs.Uniforms
+	uniformsMutex sync.Mutex
+	sendUniforms  chan programs.Uniforms
 }
 
 func glDebugMessage(
@@ -214,6 +216,16 @@ func (w *RenderWindow) glaRealize(gla *gtk.GLArea) {
 }
 
 func (w *RenderWindow) glaRender(gla *gtk.GLArea) {
+	if w.clickingMouse != nil {
+		pos := w.getMousePos()
+		d := pos.Sub(w.clickPos)
+		w.uniformsMutex.Lock()
+		w.uniforms.Pos = w.uniforms.Pos.Add(mgl64.Vec2{float64(d.X()), -float64(d.Y())}.Mul(w.uniforms.Zoom * 2))
+		w.uniformsMutex.Unlock()
+		w.clickPos = pos
+		gla.QueueRender()
+	}
+
 	w.loadUniforms()
 	gl.Clear(gl.COLOR_BUFFER_BIT)
 	gl.UseProgram(w.program)
@@ -224,72 +236,164 @@ func (w *RenderWindow) glaRender(gla *gtk.GLArea) {
 func (w *RenderWindow) glaUnrealize(gla *gtk.GLArea) {}
 
 func (w *RenderWindow) resize(gla *gtk.GLArea, width, height int) {
-	if height > width {
-		w.uniforms.Camera = mgl32.Scale3D(float32(height)/float32(width), 1, 1)
+	w.width, w.height = width, height
+
+	w.uniformsMutex.Lock()
+	if w.height > w.width {
+		w.uniforms.Camera = mgl32.Scale3D(float32(w.height)/float32(w.width), 1, 1)
 	} else {
-		w.uniforms.Camera = mgl32.Scale3D(1, float32(width)/float32(height), 1)
+		w.uniforms.Camera = mgl32.Scale3D(1, float32(w.width)/float32(w.height), 1)
 	}
-	gl.Viewport(0, 0, int32(width), int32(height))
+	w.uniformsMutex.Unlock()
+
+	gl.Viewport(0, 0, int32(w.width), int32(w.height))
+}
+
+func (w *RenderWindow) getMousePos() mgl32.Vec2 {
+	var x, y int
+	screen := w.GetScreen()
+	w.clickingMouse.GetPosition(&screen, &x, &y)
+
+	if w.height > w.width {
+		return mgl32.Vec2{float32(x) / float32(w.height), float32(y) / float32(w.height)}
+	} else {
+		return mgl32.Vec2{float32(x) / float32(w.width), float32(y) / float32(w.width)}
+	}
 }
 
 func (w *RenderWindow) button(gla *gtk.GLArea, event *gdk.Event) {
+	button := gdk.EventButtonNewFromEvent(event)
+	gla.QueueRender()
 
+	if button.Type() == gdk.EVENT_BUTTON_PRESS {
+		C_GdkDevice := (*C.GdkEventButton)(unsafe.Pointer(button.Native())).device
+		obj := &glib.Object{glib.ToGObject(unsafe.Pointer(C_GdkDevice))}
+		w.clickingMouse = &gdk.Device{obj}
+		w.clickPos = w.getMousePos()
+
+	} else if button.Type() == gdk.EVENT_BUTTON_RELEASE {
+		w.clickingMouse = nil
+		w.sendUniforms <- w.uniforms
+	}
 }
 
 func (w *RenderWindow) scroll(gla *gtk.GLArea, event *gdk.Event) {
+	w.uniformsMutex.Lock()
+	defer w.uniformsMutex.Unlock()
 
+	scroll := gdk.EventScrollNewFromEvent(event)
+	gla.QueueRender()
+
+	if scroll.Direction() == gdk.SCROLL_DOWN {
+		w.uniforms.Zoom += (w.uniforms.Zoom * .1)
+	} else if scroll.Direction() == gdk.SCROLL_UP {
+		w.uniforms.Zoom -= (w.uniforms.Zoom * .1)
+	}
+
+	if w.uniforms.Zoom > 2 {
+		w.uniforms.Zoom = 2
+	}
+	if w.uniforms.Zoom*.1 == 0 {
+		w.uniforms.Zoom = (1 / .1) * math.SmallestNonzeroFloat64
+	}
+
+	w.sendUniforms <- w.uniforms
+}
+
+func (w *RenderWindow) handleNet(conn net.Conn) {
+	enc := gob.NewEncoder(conn)
+	dec := gob.NewDecoder(conn)
+
+	go func() {
+		for {
+			defer close(w.sendUniforms)
+
+			select {
+			case uniform := <-w.sendUniforms:
+				err := enc.Encode(&uniform)
+				if err != nil {
+					w.quit(err)
+					conn.Close()
+					return
+				}
+			case <-w.ctx.Done():
+				conn.Close()
+				return
+			}
+		}
+	}()
+
+	for {
+		var uniforms programs.Uniforms
+		err := dec.Decode(&uniforms)
+		if err != nil {
+			w.quit(err)
+			return
+		}
+
+		w.uniformsMutex.Lock()
+		w.uniforms = uniforms
+		w.uniformsMutex.Unlock()
+		glib.IdleAdd(func() {
+			w.resize(w.gla, w.width, w.height)
+			w.gla.QueueRender()
+		})
+	}
 }
 
 func (w *RenderWindow) loadUniforms() {
+	w.uniformsMutex.Lock()
+	defer w.uniformsMutex.Unlock()
+
 	v := reflect.ValueOf(&w.uniforms).Elem()
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Field(i)
 
 		ptr := f.Addr().UnsafePointer()
-		loc := w.uniformLocations[strings.ToLower(v.Type().Field(i).Name)]
+		loc := w.uniformLocations[v.Type().Field(i).Tag.Get("uniform")]
 
 		count := int32(1)
 
 	SwitchElem:
 		switch f.Type() {
 		// Natural Array types
-		case typeMgl32Vec2:
+		case reflect.TypeOf(mgl32.Vec2{}):
 			gl.Uniform2fv(loc, count, (*float32)(ptr))
 			continue
-		case typeMgl32Vec3:
+		case reflect.TypeOf(mgl32.Vec3{}):
 			gl.Uniform3fv(loc, count, (*float32)(ptr))
 			continue
-		case typeMgl32Vec4:
+		case reflect.TypeOf(mgl32.Vec4{}):
 			gl.Uniform4fv(loc, count, (*float32)(ptr))
 			continue
-		case typeMgl64Vec2:
+		case reflect.TypeOf(mgl64.Vec2{}):
 			gl.Uniform2dv(loc, count, (*float64)(ptr))
 			continue
-		case typeMgl64Vec3:
+		case reflect.TypeOf(mgl64.Vec3{}):
 			gl.Uniform3dv(loc, count, (*float64)(ptr))
 			continue
-		case typeMgl64Vec4:
+		case reflect.TypeOf(mgl64.Vec4{}):
 			gl.Uniform4dv(loc, count, (*float64)(ptr))
 			continue
-		case typeMgl32Mat2:
+		case reflect.TypeOf(mgl32.Mat2{}):
 			gl.UniformMatrix2fv(loc, count, false, (*float32)(ptr))
 			continue
-		case typeMgl32Mat3:
+		case reflect.TypeOf(mgl32.Mat3{}):
 			gl.UniformMatrix3fv(loc, count, false, (*float32)(ptr))
 			continue
-		case typeMgl32Mat4:
+		case reflect.TypeOf(mgl32.Mat4{}):
 			gl.UniformMatrix4fv(loc, count, false, (*float32)(ptr))
 			continue
-		case typeInt32:
+		case reflect.TypeOf(int32(0)):
 			gl.Uniform1iv(loc, count, (*int32)(ptr))
 			continue
-		case typeUint32:
+		case reflect.TypeOf(uint32(0)):
 			gl.Uniform1uiv(loc, count, (*uint32)(ptr))
 			continue
-		case typeFloat32:
+		case reflect.TypeOf(float32(0)):
 			gl.Uniform1fv(loc, count, (*float32)(ptr))
 			continue
-		case typeFloat64:
+		case reflect.TypeOf(float64(0)):
 			gl.Uniform1dv(loc, count, (*float64)(ptr))
 			continue
 		}
@@ -337,17 +441,21 @@ func (w *RenderWindow) loadProgram(program programs.Program) error {
 
 	w.uniformLocations = make(map[string]int32)
 	t := reflect.TypeOf(w.uniforms)
+	w.uniformsMutex.Lock()
+	w.uniforms.DefaultValues()
 	for i := 0; i < t.NumField(); i++ {
-		name := strings.ToLower(t.Field(i).Name)
-
+		name := strings.ToLower(t.Field(i).Tag.Get("uniform"))
 		w.uniformLocations[name] = gl.GetUniformLocation(w.program, gl.Str(name+"\x00"))
 	}
+	w.uniformsMutex.Unlock()
 
 	gl.BindFragDataLocation(w.program, 0, gl.Str("outputColor\x00"))
 
 	w.vertexAttrib = uint32(gl.GetAttribLocation(w.program, gl.Str("vert\x00")))
 	gl.EnableVertexAttribArray(w.vertexAttrib)
 	gl.VertexAttribPointerWithOffset(w.vertexAttrib, 2, gl.FLOAT, false, 2*4, 0)
+
+	w.sendUniforms <- w.uniforms
 
 	return nil
 }
