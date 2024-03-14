@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"log"
 	"net"
-	"sync"
 
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
 )
@@ -19,9 +20,8 @@ func NewConfigWindow(
 ) *ConfigWindow {
 	var err error
 	w := &ConfigWindow{
-		ctx:          ctx,
-		quit:         quit,
-		sendUniforms: make(chan programs.Uniforms),
+		ctx:  ctx,
+		quit: quit,
 	}
 
 	go w.listen(listener)
@@ -30,36 +30,66 @@ func NewConfigWindow(
 	if err != nil {
 		quit(fmt.Errorf("gtk.ApplicationWindowNew: %w", err))
 	}
-	w.SetDefaultSize(280, 700)
-
 	w.Connect("realize", w.realize)
 
 	g, _ := gtk.GridNew()
+	y := 0
 
 	label, _ := gtk.LabelNew("Program")
 	programMenu, _ := gtk.ComboBoxTextNew()
-	programMenu.Connect("changed", func(c *gtk.ComboBoxText) {
-
-	})
-	for _, program := range programs.Programs {
-		programMenu.AppendText(program.Name)
+	for i := 0; i < programs.NumPrograms(); i++ {
+		programMenu.AppendText(programs.GetProgram(i).Name)
 	}
 	programMenu.SetActive(0)
-
-	g.Attach(label, 0, 0, 1, 1)
-	g.Attach(programMenu, 1, 0, 1, 1)
+	programMenu.Connect("changed", func(c *gtk.ComboBoxText) {
+		w.program = programs.GetProgram(c.GetActive())
+		w.sendMessage <- w.program
+	})
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(programMenu, 1, y, 1, 1)
+	y++
 
 	label, _ = gtk.LabelNew("Colour Pallet")
 	colourButton, _ := gtk.ButtonNewWithLabel("Randomize")
 	colourButton.Connect("clicked", func(button *gtk.Button) {
 		w.uniforms.ColourPallet = programs.RandomColourPallet()
-		w.sendUniforms <- w.uniforms
+		w.sendMessage <- w.uniforms
 	})
-	g.Attach(label, 0, 1, 1, 1)
-	g.Attach(colourButton, 1, 1, 1, 1)
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(colourButton, 1, y, 1, 1)
+	y++
+
+	label, _ = gtk.LabelNew("Iterations")
+	iterationsButton, _ := gtk.SpinButtonNewWithRange(0, 10000, 1)
+	iterationsButton.SetValue(500)
+	iterationsButton.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.uniforms.Iterations = uint32(b.GetValueAsInt())
+		w.sendMessage <- w.uniforms
+	})
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(iterationsButton, 1, y, 1, 1)
+	y++
+
+	for i := range w.uniforms.Sliders {
+		label, _ := gtk.LabelNew(fmt.Sprintf("Slider %v", i))
+		slider, _ := gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -1, 1, 0.0001)
+		slider.SetValue(0)
+		slider.Connect("value-changed", func(s *gtk.Scale) {
+			w.uniforms.Sliders[i] = s.GetValue()
+			w.sendMessage <- w.uniforms
+		})
+
+		slider.SetSizeRequest(300, 20)
+
+		g.Attach(label, 0, y, 1, 1)
+		g.Attach(slider, 1, y, 1, 1)
+
+		y++
+	}
 
 	w.Add(g)
 	w.ShowAll()
+	w.SetKeepAbove(true)
 
 	return w
 }
@@ -70,65 +100,107 @@ type ConfigWindow struct {
 	ctx  context.Context
 	quit func(error)
 
-	uniforms      programs.Uniforms
-	uniformsMutex sync.Mutex
-	sendUniforms  chan programs.Uniforms
+	uniforms    programs.Uniforms
+	program     programs.Program
+	sendMessage chan interface{}
 }
 
 func (w *ConfigWindow) realize(_ *gtk.ApplicationWindow) {
 
 }
 
+type skipClient struct {
+	msg  interface{}
+	addr net.Addr
+}
+
+func (w *ConfigWindow) handleReceive(conn net.Conn) {
+	defer conn.Close()
+	dec := gob.NewDecoder(conn)
+
+	for {
+		var v interface{}
+		err := dec.Decode(&v)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		switch msg := v.(type) {
+		case *programs.Uniforms:
+			glib.IdleAdd(func() {
+				w.uniforms = *msg
+			})
+			w.sendMessage <- skipClient{
+				msg:  *msg,
+				addr: conn.RemoteAddr(),
+			}
+		}
+	}
+}
+
 func (w *ConfigWindow) listen(listener net.Listener) {
-	clients := make(map[net.Addr]*gob.Encoder, 1)
-	var mutex sync.Mutex
+	w.sendMessage = make(chan interface{})
+	defer close(w.sendMessage)
+	defer listener.Close()
+	defer w.quit(fmt.Errorf("unknown error"))
+
+	newClient := make(chan net.Conn)
 
 	go func() {
-		defer close(w.sendUniforms)
+		clients := make(map[net.Addr]struct {
+			conn net.Conn
+			enc  *gob.Encoder
+		})
 
 		for {
 			select {
-			case uniform := <-w.sendUniforms:
-				mutex.Lock()
-				for _, client := range clients {
-					client.Encode(&uniform)
+			case client := <-newClient:
+				clients[client.RemoteAddr()] = struct {
+					conn net.Conn
+					enc  *gob.Encoder
+				}{
+					conn: client,
+					enc:  gob.NewEncoder(client),
 				}
-				mutex.Unlock()
+
+			case msg, ok := <-w.sendMessage:
+				if !ok {
+					return
+				}
+
+				var skip net.Addr
+				if sc, ok := msg.(skipClient); ok {
+					skip = sc.addr
+					msg = sc.msg
+				}
+
+				for addr, client := range clients {
+					if addr == skip {
+						continue
+					}
+
+					err := client.enc.Encode(&msg)
+					if err != nil {
+						delete(clients, addr)
+						continue
+					}
+				}
+
 			case <-w.ctx.Done():
-				listener.Close()
 				return
 			}
 		}
 	}()
 
 	for {
-		conn, err := listener.Accept()
+		client, err := listener.Accept()
 		if err != nil {
 			w.quit(err)
 			return
 		}
 
-		go func(conn net.Conn) {
-			enc := gob.NewEncoder(conn)
-			dec := gob.NewDecoder(conn)
-			mutex.Lock()
-			clients[conn.RemoteAddr()] = enc
-			mutex.Unlock()
-
-			for {
-				var uniforms programs.Uniforms
-				err := dec.Decode(&uniforms)
-				if err != nil {
-					mutex.Lock()
-					delete(clients, conn.RemoteAddr())
-					mutex.Unlock()
-					return
-				}
-
-				w.uniformsMutex.Lock()
-				w.uniforms = uniforms
-				w.uniformsMutex.Unlock()
-			}
-		}(conn)
+		go w.handleReceive(client)
+		newClient <- client
 	}
 }
