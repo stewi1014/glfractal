@@ -41,8 +41,8 @@ func NewConfigWindow(
 	programMenu.Connect("changed", func(c *gtk.ComboBoxText) {
 
 	})
-	for _, program := range programs.Programs() {
-		programMenu.AppendText(program.Name())
+	for _, program := range programs.Programs {
+		programMenu.AppendText(program.Name)
 	}
 	programMenu.SetActive(0)
 

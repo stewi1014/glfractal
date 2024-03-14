@@ -2,24 +2,19 @@ package programs
 
 import (
 	_ "embed"
-	"image/color"
 )
 
 //go:embed default.vert
-var VertexShader string
+var defaultVertexShader string
 
-type Program interface {
-	At(x int, y int) color.Color
-	Name() string
-	FragmentShader() string
+type Program struct {
+	Name           string
+	VertexShader   string
+	FragmentShader string
 }
 
-var programs []Program
+var Programs []Program
 
-func RegisterProgram(program Program) {
-	programs = append(programs, program)
-}
-
-func Programs() []Program {
-	return programs
+func registerProgram(program Program) {
+	Programs = append(Programs, program)
 }

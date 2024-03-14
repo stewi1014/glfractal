@@ -209,7 +209,7 @@ func (w *RenderWindow) glaRealize(gla *gtk.GLArea) {
 	gl.BindBuffer(gl.ARRAY_BUFFER, w.vbo)
 	gl.BufferData(gl.ARRAY_BUFFER, len(verticies)*4, gl.Ptr(verticies), gl.STATIC_DRAW)
 
-	err = w.loadProgram(programs.Programs()[0])
+	err = w.loadProgram(programs.Programs[0])
 	if err != nil {
 		w.quit(err)
 	}
@@ -409,12 +409,12 @@ func (w *RenderWindow) loadUniforms() {
 }
 
 func (w *RenderWindow) loadProgram(program programs.Program) error {
-	vertexShader, err := compileShader(programs.VertexShader+"\x00", gl.VERTEX_SHADER)
+	vertexShader, err := compileShader(program.VertexShader+"\x00", gl.VERTEX_SHADER)
 	if err != nil {
 		return err
 	}
 
-	fragmentShader, err := compileShader(program.FragmentShader()+"\x00", gl.FRAGMENT_SHADER)
+	fragmentShader, err := compileShader(program.FragmentShader+"\x00", gl.FRAGMENT_SHADER)
 	if err != nil {
 		return err
 	}
