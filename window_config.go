@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"image/png"
 	"log"
@@ -18,6 +19,36 @@ import (
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
 )
+
+var imageSizePresets = []struct {
+	name   string
+	width  int
+	height int
+}{{
+	name:   "1080p",
+	width:  1920,
+	height: 1080,
+}, {
+	name:   "4K",
+	width:  3840,
+	height: 2160,
+}, {
+	name:   "8K",
+	width:  7680,
+	height: 4320,
+}, {
+	name:   "16K",
+	width:  15360,
+	height: 8640,
+}, {
+	name:   "32k",
+	width:  30720,
+	height: 17280,
+}, {
+	name:   "64K",
+	width:  61440,
+	height: 34560,
+}}
 
 func parseNumber(e *gtk.Entry) int {
 	str, err := e.GetText()
@@ -101,6 +132,7 @@ func NewConfigWindow(
 		quit:           quit,
 		colourSeed:     time.Now().Unix(),
 		colourWalkRate: 0.3,
+		saveAntiAlias:  float64(1) / 3,
 		startingColour: mgl32.Vec3{
 			rand.Float32(),
 			rand.Float32(),
@@ -235,9 +267,20 @@ func NewConfigWindow(
 	g.Attach(seperator, 0, y, 4, 1)
 	y++
 
-	w.saveWidth = 15360
-	w.saveHeight = 8640
-	label, _ = gtk.LabelNew("Save")
+	label, _ = gtk.LabelNew("Image Render")
+	defaultImageSize := 2
+	widthEntry, _ := gtk.EntryNew()
+	widthEntry.SetText(strconv.Itoa(imageSizePresets[defaultImageSize].width))
+	w.saveWidth = imageSizePresets[defaultImageSize].width
+	widthEntry.Connect("changed", func(e *gtk.Entry) {
+		w.saveWidth = parseNumber(e)
+	})
+	heightEntry, _ := gtk.EntryNew()
+	heightEntry.SetText(strconv.Itoa(imageSizePresets[defaultImageSize].height))
+	w.saveHeight = imageSizePresets[defaultImageSize].height
+	heightEntry.Connect("changed", func(e *gtk.Entry) {
+		w.saveHeight = parseNumber(e)
+	})
 	saveButton, _ := gtk.ButtonNewWithLabel("Save")
 	saveButton.Connect("clicked", func() {
 		pd := NewProgressDialog(
@@ -251,19 +294,32 @@ func NewConfigWindow(
 			return
 		}
 	})
-	widthEntry, _ := gtk.EntryNew()
-	widthEntry.SetText(strconv.Itoa(w.saveWidth))
-	widthEntry.Connect("changed", func(e *gtk.Entry) {
-		w.saveWidth = parseNumber(e)
+	imageSizeChooser, _ := gtk.ComboBoxTextNew()
+	for _, preset := range imageSizePresets {
+		imageSizeChooser.AppendText(preset.name)
+	}
+	imageSizeChooser.SetActive(defaultImageSize)
+	imageSizeChooser.Connect("changed", func(c *gtk.ComboBoxText) {
+		imageSize := imageSizePresets[c.GetActive()]
+		widthEntry.SetText(strconv.Itoa(imageSize.width))
+		w.saveWidth = imageSize.width
+		heightEntry.SetText(strconv.Itoa(imageSize.height))
+		w.saveWidth = imageSize.width
 	})
-	heightEntry, _ := gtk.EntryNew()
-	heightEntry.SetText(strconv.Itoa(w.saveHeight))
-	heightEntry.Connect("changed", func(e *gtk.Entry) {
-		w.saveHeight = parseNumber(e)
+	imageAntiAlias, _ := gtk.CheckButtonNewWithLabel("Antialias")
+	imageAntiAlias.SetActive(true)
+	w.saveAntiAlias = float64(1) / 3
+	imageAntiAlias.Connect("toggled", func(b *gtk.CheckButton) {
+		if b.GetActive() {
+			w.saveAntiAlias = float64(1) / 3
+		} else {
+			w.saveAntiAlias = 0
+		}
 	})
-
 	g.Attach(label, 0, y, 1, 1)
 	g.Attach(saveButton, 1, y, 1, 1)
+	g.Attach(imageSizeChooser, 2, y, 1, 1)
+	g.Attach(imageAntiAlias, 3, y, 1, 1)
 	y++
 	label, _ = gtk.LabelNew("Width")
 	g.Attach(label, 0, y, 1, 1)
@@ -301,6 +357,7 @@ type ConfigWindow struct {
 
 	saveWidth, saveHeight int
 	saveName              string
+	saveAntiAlias         float64
 }
 
 func (w *ConfigWindow) realize(_ *gtk.ApplicationWindow) {
@@ -328,16 +385,20 @@ func (w *ConfigWindow) generateColour() {
 }
 
 func (w *ConfigWindow) save(pd *ProgressDialog) error {
-	image, err := w.program.GetImage(w.uniforms, w.saveWidth, w.saveHeight)
+	image, err := w.program.GetImage(w.uniforms, w.saveWidth, w.saveHeight, w.saveAntiAlias)
 	if err != nil {
 		return err
 	}
 
-	if w.saveName == "" {
-		w.saveName = w.getSaveName()
+	name := w.saveName
+
+	if name == "" {
+		name = w.getSaveName()
+	} else if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
+		name = w.getSaveName()
 	}
 
-	file, err := os.Create(w.saveName)
+	file, err := os.Create(name)
 	if err != nil {
 		return err
 	}

@@ -2,8 +2,9 @@ package programs
 
 import (
 	_ "embed"
-	"image/color"
 	"math"
+
+	"github.com/go-gl/mathgl/mgl32"
 )
 
 //go:embed shaders/julia.frag
@@ -14,7 +15,7 @@ func init() {
 		Name:           "julia",
 		VertexShader:   defaultVertexShader,
 		FragmentShader: juliaFragment,
-		getPixel: func(uniforms Uniforms, x, y float64) color.Color {
+		getPixel: func(uniforms Uniforms, x, y float64) mgl32.Vec3 {
 			iterations := 0
 
 			z := complex(x*uniforms.Zoom-uniforms.Pos[0], y*uniforms.Zoom-uniforms.Pos[1])
@@ -25,15 +26,9 @@ func init() {
 			}
 
 			if iterations == int(uniforms.Iterations) {
-				return color.Black
+				return NullColour
 			} else {
-				colour := uniforms.ColourPallet[iterations%colours]
-				return color.RGBA{
-					R: uint8(colour[0] * 255),
-					G: uint8(colour[1] * 255),
-					B: uint8(colour[2] * 255),
-					A: 255,
-				}
+				return uniforms.ColourPallet[iterations%colours]
 			}
 		},
 	})
