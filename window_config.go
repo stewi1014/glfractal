@@ -4,13 +4,87 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"image/png"
 	"log"
+	"math/rand"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
 )
+
+func parseNumber(e *gtk.Entry) int {
+	str, err := e.GetText()
+	if err != nil {
+		log.Println(err)
+		return 0
+	}
+
+	str = strings.ReplaceAll(str, ",", "")
+	str = strings.ReplaceAll(str, ".", "")
+	str = strings.TrimSpace(str)
+
+	n, err := strconv.Atoi(str)
+	if err != nil {
+		log.Println(err)
+	}
+
+	return n
+}
+
+func NewErrorDialog(
+	parent *gtk.ApplicationWindow,
+	title string,
+	err error,
+) {
+	d, _ := gtk.DialogNewWithButtons(
+		title,
+		parent,
+		gtk.DIALOG_DESTROY_WITH_PARENT,
+		[]interface{}{"OK", gtk.RESPONSE_OK},
+	)
+	d.Connect("response", d.Destroy)
+
+	ca, _ := d.GetContentArea()
+	l, _ := gtk.LabelNew(err.Error())
+	ca.Add(l)
+	d.ShowAll()
+}
+
+func NewProgressDialog(
+	parent *gtk.ApplicationWindow,
+	title string,
+) *ProgressDialog {
+	pd := &ProgressDialog{}
+	pd.Dialog, _ = gtk.DialogNewWithButtons(
+		title,
+		parent,
+		gtk.DIALOG_DESTROY_WITH_PARENT,
+		[]interface{}{"CANCEL", gtk.RESPONSE_CANCEL},
+	)
+	pd.Connect("response", pd.Destroy)
+
+	ca, _ := pd.GetContentArea()
+	pd.l, _ = gtk.LabelNew("starting...")
+	ca.Add(pd.l)
+	pd.pb, _ = gtk.ProgressBarNew()
+	pd.pb.SetSizeRequest(500, 80)
+	ca.Add(pd.pb)
+
+	pd.ShowAll()
+
+	return pd
+}
+
+type ProgressDialog struct {
+	*gtk.Dialog
+	pb *gtk.ProgressBar
+	l  *gtk.Label
+}
 
 func NewConfigWindow(
 	app *gtk.Application,
@@ -33,6 +107,8 @@ func NewConfigWindow(
 	w.Connect("realize", w.realize)
 
 	g, _ := gtk.GridNew()
+	g.SetRowSpacing(10)
+	g.SetHExpand(true)
 	y := 0
 
 	label, _ := gtk.LabelNew("Program")
@@ -40,11 +116,13 @@ func NewConfigWindow(
 	for i := 0; i < programs.NumPrograms(); i++ {
 		programMenu.AppendText(programs.GetProgram(i).Name)
 	}
+	w.program = programs.GetProgram(0)
 	programMenu.SetActive(0)
 	programMenu.Connect("changed", func(c *gtk.ComboBoxText) {
 		w.program = programs.GetProgram(c.GetActive())
 		w.sendMessage <- w.program
 	})
+	programMenu.SetHExpand(true)
 	g.Attach(label, 0, y, 1, 1)
 	g.Attach(programMenu, 1, y, 1, 1)
 	y++
@@ -70,9 +148,13 @@ func NewConfigWindow(
 	g.Attach(iterationsButton, 1, y, 1, 1)
 	y++
 
+	seperator, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	g.Attach(seperator, 0, y, 2, 1)
+	y++
+
 	for i := range w.uniforms.Sliders {
 		label, _ := gtk.LabelNew(fmt.Sprintf("Slider %v", i))
-		slider, _ := gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -1, 1, 0.0001)
+		slider, _ := gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -2, 2, 0.00001)
 		slider.SetValue(0)
 		slider.Connect("value-changed", func(s *gtk.Scale) {
 			w.uniforms.Sliders[i] = s.GetValue()
@@ -86,6 +168,49 @@ func NewConfigWindow(
 
 		y++
 	}
+
+	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	g.Attach(seperator, 0, y, 2, 1)
+	y++
+
+	w.saveWidth = 15360
+	w.saveHeight = 8640
+	label, _ = gtk.LabelNew("Save")
+	saveButton, _ := gtk.ButtonNewWithLabel("Save")
+	saveButton.Connect("clicked", func() {
+		pd := NewProgressDialog(
+			w.ApplicationWindow,
+			"Saving Image",
+		)
+
+		err := w.save(pd)
+		if err != nil {
+			NewErrorDialog(w.ApplicationWindow, "Save Error", err)
+			return
+		}
+	})
+	widthEntry, _ := gtk.EntryNew()
+	widthEntry.SetText(strconv.Itoa(w.saveWidth))
+	widthEntry.Connect("changed", func(e *gtk.Entry) {
+		w.saveWidth = parseNumber(e)
+	})
+	heightEntry, _ := gtk.EntryNew()
+	heightEntry.SetText(strconv.Itoa(w.saveHeight))
+	heightEntry.Connect("changed", func(e *gtk.Entry) {
+		w.saveHeight = parseNumber(e)
+	})
+
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(saveButton, 1, y, 1, 1)
+	y++
+	label, _ = gtk.LabelNew("Width")
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(widthEntry, 1, y, 1, 1)
+	y++
+	label, _ = gtk.LabelNew("Height")
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(heightEntry, 1, y, 1, 1)
+	y++
 
 	w.Add(g)
 	w.ShowAll()
@@ -103,10 +228,70 @@ type ConfigWindow struct {
 	uniforms    programs.Uniforms
 	program     programs.Program
 	sendMessage chan interface{}
+
+	saveWidth, saveHeight int
+	saveName              string
 }
 
 func (w *ConfigWindow) realize(_ *gtk.ApplicationWindow) {
 
+}
+
+func (w *ConfigWindow) getSaveName() string {
+	return fmt.Sprintf(
+		"fractal_%v_%vx%v_%v.png",
+		w.program.Name,
+		w.saveWidth,
+		w.saveHeight,
+		rand.Intn(10000),
+	)
+}
+
+func (w *ConfigWindow) save(pd *ProgressDialog) error {
+	image, err := w.program.GetImage(w.uniforms, w.saveWidth, w.saveHeight)
+	if err != nil {
+		return err
+	}
+
+	if w.saveName == "" {
+		w.saveName = w.getSaveName()
+	}
+
+	file, err := os.Create(w.saveName)
+	if err != nil {
+		return err
+	}
+
+	pd.Connect("response", func() {
+		file.Close()
+	})
+
+	done := false
+	go func() {
+		err := png.Encode(file, image)
+		if err != nil {
+			log.Println(err)
+		}
+		fmt.Println(image.Progress())
+		file.Close()
+		done = true
+	}()
+
+	glib.IdleAdd(func() bool {
+		if done {
+			pd.Destroy()
+			return false
+		}
+		progress := image.Progress()
+		pd.l.SetText(fmt.Sprintf("saving %v: %2.2f%%", file.Name(), progress*100))
+		pd.pb.SetText(fmt.Sprintf("saving %v: %2.2f%%", file.Name(), progress*100))
+		pd.pb.SetFraction(image.Progress())
+		return true
+	})
+
+	w.saveName = w.getSaveName()
+
+	return nil
 }
 
 type skipClient struct {
@@ -182,6 +367,7 @@ func (w *ConfigWindow) listen(listener net.Listener) {
 
 					err := client.enc.Encode(&msg)
 					if err != nil {
+						client.conn.Close()
 						delete(clients, addr)
 						continue
 					}
