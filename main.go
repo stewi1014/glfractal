@@ -53,19 +53,19 @@ func gtkMain(ctx context.Context) error {
 	app.Connect("activate", func() {
 		client, listener := NewPipeListener(appContext)
 
-		renderWindow := NewRenderWindow(app, client, ctx, appQuit)
-		renderWindow.Connect("destroy", func() {
-			appQuit(nil)
-		})
-		renderWindow.SetTitle("GLFractal Render")
-		renderWindow.SetIcon(iconPixbuf)
-
 		configWindow := NewConfigWindow(app, listener, ctx, appQuit)
 		configWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})
 		configWindow.SetTitle("GLFractal Config")
 		configWindow.SetIcon(iconPixbuf)
+
+		renderWindow := NewRenderWindow(app, client, ctx, appQuit)
+		renderWindow.Connect("destroy", func() {
+			appQuit(nil)
+		})
+		renderWindow.SetTitle("GLFractal Render")
+		renderWindow.SetIcon(iconPixbuf)
 	})
 
 	go func() {

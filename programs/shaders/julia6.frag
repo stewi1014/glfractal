@@ -21,7 +21,7 @@ uint julia(in dvec2 z_const) {
     dvec2 z = z_const;
 
     while (abs(z.x) + abs(z.y) <= 4 && iterations < max_iterations) {
-        z = multiply(multiply(multiply(z, z), multiply(z, z)), multiply(z, z)) + dvec2(sliders[0]-0.50517,sliders[1]-0.35667);
+        z = multiply(multiply(multiply(z, z), multiply(z, z)), multiply(z, z)) + dvec2(sliders[0]-0.7285084,sliders[1]-0.2466376);
         iterations++;
     }
 

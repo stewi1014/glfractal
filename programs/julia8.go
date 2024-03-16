@@ -21,7 +21,7 @@ func init() {
 			z := complex(x*uniforms.Zoom-uniforms.Pos[0], y*uniforms.Zoom-uniforms.Pos[1])
 
 			for math.Abs(real(z))+math.Abs(imag(z)) <= 4 && iterations < int(uniforms.Iterations) {
-				z = z*z*z*z*z*z*z*z + complex(uniforms.Sliders[0]-1.08475, uniforms.Sliders[1])
+				z = z*z*z*z*z*z*z*z + complex(uniforms.Sliders[0], uniforms.Sliders[1])
 				iterations++
 			}
 

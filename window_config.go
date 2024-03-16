@@ -100,7 +100,6 @@ func NewProgressDialog(
 		gtk.DIALOG_DESTROY_WITH_PARENT,
 		[]interface{}{"CANCEL", gtk.RESPONSE_CANCEL},
 	)
-	pd.Connect("response", pd.Destroy)
 
 	ca, _ := pd.GetContentArea()
 	pd.l, _ = gtk.LabelNew("starting...")
@@ -246,22 +245,36 @@ func NewConfigWindow(
 	g.Attach(iterationsButton, 1, y, 3, 1)
 	y++
 
+	sliders := make([]*gtk.Scale, len(w.uniforms.Sliders))
 	for i := range w.uniforms.Sliders {
 		label, _ := gtk.LabelNew(fmt.Sprintf("Slider %v", i))
-		slider, _ := gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -3, 3, 0.000001)
-		slider.SetValue(0)
-		slider.Connect("value-changed", func(s *gtk.Scale) {
+		sliders[i], _ = gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -2, 2, 0.00000001)
+		sliders[i].SetProperty("digits", 7)
+		sliders[i].SetValue(0)
+		sliders[i].Connect("value-changed", func(s *gtk.Scale) {
 			w.uniforms.Sliders[i] = s.GetValue()
 			w.sendMessage <- w.uniforms
 		})
 
-		slider.SetSizeRequest(300, 20)
+		sliders[i].SetSizeRequest(300, 20)
 
 		g.Attach(label, 0, y, 1, 1)
-		g.Attach(slider, 1, y, 3, 1)
+		g.Attach(sliders[i], 1, y, 3, 1)
 
 		y++
 	}
+
+	sliderReset, _ := gtk.ButtonNewWithLabel("Reset")
+	sliderReset.Connect("clicked", func(button *gtk.Button) {
+		for i := range w.uniforms.Sliders {
+			w.uniforms.Sliders[i] = 0
+			sliders[i].SetValue(0)
+		}
+		w.sendMessage <- w.uniforms
+	})
+
+	g.Attach(sliderReset, 1, y, 3, 1)
+	y++
 
 	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
 	g.Attach(seperator, 0, y, 4, 1)
@@ -404,7 +417,12 @@ func (w *ConfigWindow) save(pd *ProgressDialog) error {
 	}
 
 	pd.Connect("response", func() {
+		defer pd.Destroy()
 		file.Close()
+		err := os.Remove(file.Name())
+		if err != nil {
+			log.Println(err)
+		}
 	})
 
 	done := false
@@ -466,7 +484,7 @@ func (w *ConfigWindow) handleReceive(conn net.Conn) {
 }
 
 func (w *ConfigWindow) listen(listener net.Listener) {
-	w.sendMessage = make(chan interface{})
+	w.sendMessage = make(chan interface{}, 10)
 	defer close(w.sendMessage)
 	defer listener.Close()
 	defer w.quit(fmt.Errorf("unknown error"))
