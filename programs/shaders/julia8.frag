@@ -16,20 +16,14 @@ dvec2 multiply(in dvec2 i, in dvec2 j) {
     return dvec2(i.x * j.x - i.y * j.y, i.x * j.y + i.y * j.x);
 }
 
-uint julia(in dvec2 z_const) {
-    uint iterations = 0;
-    dvec2 z = z_const;
+void main() {
+    dvec2 z = frag * zoom - pos;
 
+    uint iterations = 0;
     while (abs(z.x) + abs(z.y) <= 4 && iterations < max_iterations) {
-        z = multiply(multiply(multiply(z, z), multiply(z, z)), multiply(multiply(z, z), multiply(z, z))) + dvec2(sliders[0],sliders[1]);
+        z = multiply(multiply(multiply(z, z), multiply(z, z)), multiply(multiply(z, z), multiply(z, z))) + dvec2(sliders[0]-1.0824372,sliders[1]);
         iterations++;
     }
-
-    return iterations;
-}
-
-void main() {
-    uint iterations = julia(frag * zoom - pos);
 
     if (iterations == max_iterations) {
         outputColor = vec3(0.1,0.1,0.1);
