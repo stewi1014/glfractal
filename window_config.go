@@ -11,7 +11,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
@@ -52,6 +54,7 @@ func NewErrorDialog(
 	ca, _ := d.GetContentArea()
 	l, _ := gtk.LabelNew(err.Error())
 	ca.Add(l)
+	d.SetKeepAbove(true)
 	d.ShowAll()
 }
 
@@ -74,7 +77,7 @@ func NewProgressDialog(
 	pd.pb, _ = gtk.ProgressBarNew()
 	pd.pb.SetSizeRequest(500, 80)
 	ca.Add(pd.pb)
-
+	pd.SetKeepAbove(true)
 	pd.ShowAll()
 
 	return pd
@@ -94,8 +97,15 @@ func NewConfigWindow(
 ) *ConfigWindow {
 	var err error
 	w := &ConfigWindow{
-		ctx:  ctx,
-		quit: quit,
+		ctx:            ctx,
+		quit:           quit,
+		colourSeed:     time.Now().Unix(),
+		colourWalkRate: 0.3,
+		startingColour: mgl32.Vec3{
+			rand.Float32(),
+			rand.Float32(),
+			rand.Float32(),
+		},
 	}
 
 	go w.listen(listener)
@@ -121,20 +131,76 @@ func NewConfigWindow(
 	programMenu.Connect("changed", func(c *gtk.ComboBoxText) {
 		w.program = programs.GetProgram(c.GetActive())
 		w.sendMessage <- w.program
+		w.sendMessage <- w.uniforms
 	})
 	programMenu.SetHExpand(true)
 	g.Attach(label, 0, y, 1, 1)
-	g.Attach(programMenu, 1, y, 1, 1)
+	g.Attach(programMenu, 1, y, 3, 1)
 	y++
 
+	seperator, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	g.Attach(seperator, 0, y, 4, 1)
+	y++
+
+	colourStartR, _ := gtk.SpinButtonNewWithRange(0, 1, 0.01)
+	colourStartR.SetValue(float64(w.startingColour[0]))
+	colourStartR.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.startingColour[0] = float32(b.GetValue())
+		w.generateColour()
+	})
+
+	colourStartG, _ := gtk.SpinButtonNewWithRange(0, 1, 0.01)
+	colourStartG.SetValue(float64(w.startingColour[1]))
+	colourStartG.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.startingColour[1] = float32(b.GetValue())
+		w.generateColour()
+	})
+
+	colourStartB, _ := gtk.SpinButtonNewWithRange(0, 1, 0.01)
+	colourStartB.SetValue(float64(w.startingColour[2]))
+	colourStartB.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.startingColour[2] = float32(b.GetValue())
+		w.generateColour()
+	})
+
 	label, _ = gtk.LabelNew("Colour Pallet")
-	colourButton, _ := gtk.ButtonNewWithLabel("Randomize")
-	colourButton.Connect("clicked", func(button *gtk.Button) {
-		w.uniforms.ColourPallet = programs.RandomColourPallet()
-		w.sendMessage <- w.uniforms
+	colourSeedButton, _ := gtk.ButtonNewWithLabel("Randomize Seed")
+	colourSeedButton.Connect("clicked", func(button *gtk.Button) {
+		w.colourSeed = rand.Int63()
+		w.generateColour()
+	})
+	colourStartButton, _ := gtk.ButtonNewWithLabel("Randomize Start")
+	colourStartButton.Connect("clicked", func(button *gtk.Button) {
+		w.startingColour = mgl32.Vec3{
+			rand.Float32(),
+			rand.Float32(),
+			rand.Float32(),
+		}
+		colourStartR.SetValue(float64(w.startingColour[0]))
+		colourStartG.SetValue(float64(w.startingColour[1]))
+		colourStartB.SetValue(float64(w.startingColour[2]))
+		w.generateColour()
+	})
+	colourWalkRate, _ := gtk.SpinButtonNewWithRange(0, 1, 0.02)
+	colourWalkRate.SetValue(0.3)
+	colourWalkRate.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.colourWalkRate = float32(b.GetValue())
+		w.generateColour()
 	})
 	g.Attach(label, 0, y, 1, 1)
-	g.Attach(colourButton, 1, y, 1, 1)
+	g.Attach(colourWalkRate, 1, y, 1, 1)
+	g.Attach(colourSeedButton, 2, y, 1, 1)
+	g.Attach(colourStartButton, 3, y, 1, 1)
+	y++
+	label, _ = gtk.LabelNew("Start R,G,B")
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(colourStartR, 1, y, 1, 1)
+	g.Attach(colourStartG, 2, y, 1, 1)
+	g.Attach(colourStartB, 3, y, 1, 1)
+	y++
+
+	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
+	g.Attach(seperator, 0, y, 4, 1)
 	y++
 
 	label, _ = gtk.LabelNew("Iterations")
@@ -145,16 +211,12 @@ func NewConfigWindow(
 		w.sendMessage <- w.uniforms
 	})
 	g.Attach(label, 0, y, 1, 1)
-	g.Attach(iterationsButton, 1, y, 1, 1)
-	y++
-
-	seperator, _ := gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
-	g.Attach(seperator, 0, y, 2, 1)
+	g.Attach(iterationsButton, 1, y, 3, 1)
 	y++
 
 	for i := range w.uniforms.Sliders {
 		label, _ := gtk.LabelNew(fmt.Sprintf("Slider %v", i))
-		slider, _ := gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -2, 2, 0.00001)
+		slider, _ := gtk.ScaleNewWithRange(gtk.ORIENTATION_HORIZONTAL, -3, 3, 0.000001)
 		slider.SetValue(0)
 		slider.Connect("value-changed", func(s *gtk.Scale) {
 			w.uniforms.Sliders[i] = s.GetValue()
@@ -164,13 +226,13 @@ func NewConfigWindow(
 		slider.SetSizeRequest(300, 20)
 
 		g.Attach(label, 0, y, 1, 1)
-		g.Attach(slider, 1, y, 1, 1)
+		g.Attach(slider, 1, y, 3, 1)
 
 		y++
 	}
 
 	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
-	g.Attach(seperator, 0, y, 2, 1)
+	g.Attach(seperator, 0, y, 4, 1)
 	y++
 
 	w.saveWidth = 15360
@@ -205,16 +267,20 @@ func NewConfigWindow(
 	y++
 	label, _ = gtk.LabelNew("Width")
 	g.Attach(label, 0, y, 1, 1)
-	g.Attach(widthEntry, 1, y, 1, 1)
+	g.Attach(widthEntry, 1, y, 3, 1)
 	y++
 	label, _ = gtk.LabelNew("Height")
 	g.Attach(label, 0, y, 1, 1)
-	g.Attach(heightEntry, 1, y, 1, 1)
+	g.Attach(heightEntry, 1, y, 3, 1)
 	y++
 
 	w.Add(g)
 	w.ShowAll()
 	w.SetKeepAbove(true)
+
+	w.uniforms.DefaultValues()
+	w.generateColour()
+	w.sendMessage <- w.uniforms
 
 	return w
 }
@@ -224,6 +290,10 @@ type ConfigWindow struct {
 
 	ctx  context.Context
 	quit func(error)
+
+	colourSeed     int64
+	colourWalkRate float32
+	startingColour mgl32.Vec3
 
 	uniforms    programs.Uniforms
 	program     programs.Program
@@ -245,6 +315,16 @@ func (w *ConfigWindow) getSaveName() string {
 		w.saveHeight,
 		rand.Intn(10000),
 	)
+}
+
+func (w *ConfigWindow) generateColour() {
+	w.uniforms.ColourPallet = programs.RandomColourPallet(
+		w.startingColour,
+		w.colourWalkRate,
+		rand.New(rand.NewSource(w.colourSeed)),
+	)
+
+	w.sendMessage <- w.uniforms
 }
 
 func (w *ConfigWindow) save(pd *ProgressDialog) error {

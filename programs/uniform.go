@@ -2,6 +2,7 @@ package programs
 
 import (
 	"math/rand"
+	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/go-gl/mathgl/mgl64"
@@ -12,18 +13,19 @@ const colours = 170
 
 type ColourPallet [colours]mgl32.Vec3
 
-func RandomColourPallet() ColourPallet {
+func RandomColourPallet(
+	start mgl32.Vec3,
+	randomWalkRate float32,
+	random *rand.Rand,
+) ColourPallet {
 	var pallet ColourPallet
-	pallet[0] = mgl32.Vec3{
-		rand.Float32(),
-		rand.Float32(),
-		rand.Float32(),
-	}
+	pallet[0] = start
+
 	for i := 1; i < colours; i += 1 {
 		pallet[i] = mgl32.Vec3{
-			limit(pallet[i-1].X() + (rand.Float32()-.5)*.3),
-			limit(pallet[i-1].Y() + (rand.Float32()-.5)*.3),
-			limit(pallet[i-1].Z() + (rand.Float32()-.5)*.3),
+			limit(pallet[i-1].X() + (random.Float32()-.5)*randomWalkRate),
+			limit(pallet[i-1].Y() + (random.Float32()-.5)*randomWalkRate),
+			limit(pallet[i-1].Z() + (random.Float32()-.5)*randomWalkRate),
 		}
 	}
 	return pallet
@@ -56,5 +58,13 @@ func (u *Uniforms) DefaultValues() {
 	u.Iterations = 500
 	u.Sliders = [sliders]float64{}
 	u.Camera = mgl32.Ident4()
-	u.ColourPallet = RandomColourPallet()
+	u.ColourPallet = RandomColourPallet(
+		mgl32.Vec3{
+			rand.Float32(),
+			rand.Float32(),
+			rand.Float32(),
+		},
+		0.3,
+		rand.New(rand.NewSource(time.Now().Unix())),
+	)
 }
