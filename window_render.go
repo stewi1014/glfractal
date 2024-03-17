@@ -45,7 +45,9 @@ func NewRenderWindow(
 		return nil
 	}
 
-	w.SetDefaultSize(getWindowSize())
+	width, height := getDisplaySize()
+
+	w.SetDefaultSize(int(float64(width)*.8), int(float64(height)*.8))
 
 	w.gla, err = gtk.GLAreaNew()
 	if err != nil {
@@ -74,25 +76,6 @@ func NewRenderWindow(
 	go w.handleReceive(conn)
 
 	return w
-}
-
-func getWindowSize() (width, height int) {
-	width = 1200
-	height = 800
-
-	display, err := gdk.DisplayGetDefault()
-	if err != nil {
-		return
-	}
-
-	monitor, err := display.GetPrimaryMonitor()
-	if err != nil {
-		return
-	}
-
-	width = int(float32(monitor.GetGeometry().GetWidth()) * .6)
-	height = int(float32(monitor.GetGeometry().GetHeight()) * .6)
-	return
 }
 
 type RenderWindow struct {
@@ -221,6 +204,7 @@ func (w *RenderWindow) glaRender(gla *gtk.GLArea) {
 		w.uniforms.Pos = w.uniforms.Pos.Add(mgl64.Vec2{float64(d.X()), -float64(d.Y())}.Mul(w.uniforms.Zoom * 2))
 		w.clickPos = pos
 		gla.QueueDraw()
+		w.sendMessage <- w.uniforms
 	}
 
 	gl.Clear(gl.COLOR_BUFFER_BIT)

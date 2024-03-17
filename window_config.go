@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/go-gl/mathgl/mgl64"
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
@@ -25,6 +27,10 @@ var imageSizePresets = []struct {
 	width  int
 	height int
 }{{
+	name:   "720p",
+	width:  1280,
+	height: 720,
+}, {
 	name:   "1080p",
 	width:  1920,
 	height: 1080,
@@ -129,6 +135,7 @@ func NewConfigWindow(
 	w := &ConfigWindow{
 		ctx:            ctx,
 		quit:           quit,
+		app:            app,
 		colourSeed:     time.Now().Unix(),
 		colourWalkRate: 0.3,
 		saveAntiAlias:  float64(1) / 3,
@@ -264,7 +271,7 @@ func NewConfigWindow(
 		y++
 	}
 
-	sliderReset, _ := gtk.ButtonNewWithLabel("Reset")
+	sliderReset, _ := gtk.ButtonNewWithLabel("Reset Sliders")
 	sliderReset.Connect("clicked", func(button *gtk.Button) {
 		for i := range w.uniforms.Sliders {
 			w.uniforms.Sliders[i] = 0
@@ -273,7 +280,15 @@ func NewConfigWindow(
 		w.sendMessage <- w.uniforms
 	})
 
-	g.Attach(sliderReset, 1, y, 3, 1)
+	positionReset, _ := gtk.ButtonNewWithLabel("Reset Position")
+	positionReset.Connect("clicked", func(button *gtk.Button) {
+		w.uniforms.Zoom = 2
+		w.uniforms.Pos = mgl64.Vec2{}
+		w.sendMessage <- w.uniforms
+	})
+
+	g.Attach(sliderReset, 1, y, 1, 1)
+	g.Attach(positionReset, 2, y, 1, 1)
 	y++
 
 	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
@@ -355,6 +370,7 @@ func NewConfigWindow(
 
 type ConfigWindow struct {
 	*gtk.ApplicationWindow
+	app *gtk.Application
 
 	ctx  context.Context
 	quit func(error)
@@ -428,9 +444,8 @@ func (w *ConfigWindow) save(pd *ProgressDialog) error {
 	go func() {
 		err := png.Encode(file, image)
 		if err != nil {
-			log.Println(err)
+			NewErrorDialog(w.ApplicationWindow, "Rendering Image", err)
 		}
-		fmt.Println(image.Progress())
 		file.Close()
 		done = true
 	}()
@@ -438,16 +453,49 @@ func (w *ConfigWindow) save(pd *ProgressDialog) error {
 	glib.IdleAdd(func() bool {
 		if done {
 			pd.Destroy()
+
+			previewWindow, err := gtk.ApplicationWindowNew(w.app)
+			if err != nil {
+				return false
+			}
+
+			width, height := getDisplaySize()
+			pixbuf, err := gdk.PixbufNewFromFileAtSize(name, int(float64(width)*.8), int(float64(height)*.8))
+			if err != nil {
+				return false
+			}
+
+			previewImage, err := gtk.ImageNewFromPixbuf(pixbuf)
+			if err != nil {
+				return false
+			}
+			previewImage.SetHExpand(true)
+			previewImage.SetVExpand(true)
+			previewImage.SetSizeRequest(1280, 720)
+
+			deleteButton, _ := gtk.ButtonNewWithLabel("Delete")
+			deleteButton.Connect("clicked", func(button *gtk.Button) {
+				err := os.Remove(name)
+				if err != nil {
+					NewErrorDialog(w.ApplicationWindow, "Deleting File", err)
+				}
+				previewWindow.Destroy()
+			})
+
+			grid, _ := gtk.GridNew()
+			grid.Attach(previewImage, 0, 0, 5, 1)
+			grid.Attach(deleteButton, 4, 1, 1, 1)
+
+			previewWindow.Add(grid)
+			previewWindow.ShowAll()
+
 			return false
 		}
 		progress := image.Progress()
 		pd.l.SetText(fmt.Sprintf("saving %v: %2.2f%%", file.Name(), progress*100))
-		pd.pb.SetText(fmt.Sprintf("saving %v: %2.2f%%", file.Name(), progress*100))
 		pd.pb.SetFraction(image.Progress())
 		return true
 	})
-
-	w.saveName = w.getSaveName()
 
 	return nil
 }
@@ -474,11 +522,11 @@ func (w *ConfigWindow) handleReceive(conn net.Conn) {
 			glib.IdleAdd(func() {
 				w.uniforms.Zoom = msg.Zoom
 				w.uniforms.Pos = msg.Pos
+				w.sendMessage <- skipClient{
+					msg:  *msg,
+					addr: conn.RemoteAddr(),
+				}
 			})
-			w.sendMessage <- skipClient{
-				msg:  *msg,
-				addr: conn.RemoteAddr(),
-			}
 		}
 	}
 }

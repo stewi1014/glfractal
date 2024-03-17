@@ -20,6 +20,25 @@ const debug = true
 //go:embed icon.ico
 var icon []byte
 
+func getDisplaySize() (width, height int) {
+	width = 1280
+	height = 720
+
+	display, err := gdk.DisplayGetDefault()
+	if err != nil {
+		return
+	}
+
+	monitor, err := display.GetPrimaryMonitor()
+	if err != nil {
+		return
+	}
+
+	width = monitor.GetGeometry().GetWidth()
+	height = monitor.GetGeometry().GetHeight()
+	return
+}
+
 func init() {
 	gob.Register(&programs.Uniforms{})
 	gob.Register(&programs.Program{})
@@ -51,7 +70,7 @@ func gtkMain(ctx context.Context) error {
 
 	appContext, appQuit := context.WithCancelCause(ctx)
 	app.Connect("activate", func() {
-		client, listener := NewPipeListener(appContext)
+		clients, listener := NewPipeListener(1, appContext)
 
 		configWindow := NewConfigWindow(app, listener, ctx, appQuit)
 		configWindow.Connect("destroy", func() {
@@ -60,7 +79,7 @@ func gtkMain(ctx context.Context) error {
 		configWindow.SetTitle("GLFractal Config")
 		configWindow.SetIcon(iconPixbuf)
 
-		renderWindow := NewRenderWindow(app, client, ctx, appQuit)
+		renderWindow := NewRenderWindow(app, clients[0], ctx, appQuit)
 		renderWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})
