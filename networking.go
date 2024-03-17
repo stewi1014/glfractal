@@ -87,9 +87,7 @@ func (w *wrapAddr) RemoteAddr() net.Addr { return w.raddr }
 
 func (w *wrapAddr) LocalAddr() net.Addr { return w.laddr }
 
-var _ bool = pipeAddr{} == pipeAddr{}
-
 type pipeAddr [128 / 8]byte
 
 func (p pipeAddr) Network() string { return "pipe" }
-func (p pipeAddr) String() string  { return fmt.Sprintf("pipe_%v", p) }
+func (p pipeAddr) String() string  { return fmt.Sprintf("pipe_%v", [128 / 8]byte(p)) }

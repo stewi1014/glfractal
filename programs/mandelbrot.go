@@ -12,14 +12,18 @@ var mandelbrotFragment string
 
 func init() {
 	NewProgram(Program{
-		Name:           "mandelbrot",
+		Name:           "Mandelbrot",
 		VertexShader:   defaultVertexShader,
 		FragmentShader: mandelbrotFragment,
-		getPixel: func(uniforms Uniforms, x, y float64) mgl32.Vec3 {
+		getPixel: func(uniforms Uniforms, pos mgl32.Vec2) mgl32.Vec3 {
 			iterations := 0
 
-			z_const := complex(x*uniforms.Zoom-uniforms.Pos[0], y*uniforms.Zoom-uniforms.Pos[1])
-			z := z_const
+			z := complex(
+				float64(pos[0])*uniforms.Zoom-uniforms.Pos[0],
+				float64(pos[1])*uniforms.Zoom-uniforms.Pos[1],
+			)
+
+			z_const := z
 			for math.Abs(real(z))+math.Abs(imag(z)) <= 4 && iterations < int(uniforms.Iterations) {
 				z = z*z + z_const
 				iterations++

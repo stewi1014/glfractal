@@ -7,7 +7,6 @@ import (
 	"image/color"
 
 	"github.com/go-gl/mathgl/mgl32"
-	"github.com/go-gl/mathgl/mgl64"
 )
 
 var (
@@ -41,7 +40,7 @@ var _ image.Image = &programImage{}
 
 var ErrNoCPUImplementation = errors.New("fractal does not have a CPU implementation")
 
-type PixelFunc func(uniforms Uniforms, x, y float64) mgl32.Vec3
+type PixelFunc func(uniforms Uniforms, pos mgl32.Vec2) mgl32.Vec3
 
 type Program struct {
 	Name           string
@@ -55,7 +54,7 @@ type Image interface {
 	Progress() float64
 }
 
-func (p *Program) GetImage(uniforms Uniforms, width int, height int, antialias float64) (Image, error) {
+func (p *Program) GetImage(uniforms Uniforms, width int, height int, antialias float32) (Image, error) {
 	if p.getPixel == nil {
 		return nil, ErrNoCPUImplementation
 	}
@@ -71,7 +70,7 @@ func (p *Program) GetImage(uniforms Uniforms, width int, height int, antialias f
 	return &programImage{
 		uniforms:    uniforms,
 		getPixel:    p.getPixel,
-		scaleFactor: float64(scaleFactor),
+		scaleFactor: float32(scaleFactor),
 		antialias:   antialias,
 		bounds: image.Rect(
 			-width,
@@ -85,8 +84,8 @@ func (p *Program) GetImage(uniforms Uniforms, width int, height int, antialias f
 type programImage struct {
 	uniforms    Uniforms
 	getPixel    PixelFunc
-	scaleFactor float64
-	antialias   float64
+	scaleFactor float32
+	antialias   float32
 	bounds      image.Rectangle
 	count       int64
 }
@@ -97,8 +96,13 @@ func (i *programImage) At(x, y int) color.Color {
 	// oh how I wish I understood why this was needed
 	y = -y
 
+	pos := mgl32.Vec2{
+		float32(x) / i.scaleFactor,
+		float32(y) / i.scaleFactor,
+	}
+
 	if i.antialias == 0 {
-		c := i.getPixel(i.uniforms, float64(x)/i.scaleFactor, float64(y)/i.scaleFactor)
+		c := i.getPixel(i.uniforms, pos)
 		return color.RGBA{
 			R: uint8(c[0] * 255),
 			G: uint8(c[1] * 255),
@@ -108,9 +112,9 @@ func (i *programImage) At(x, y int) color.Color {
 	}
 
 	antialias := i.antialias / i.scaleFactor
-	xf, yf := float64(x)/i.scaleFactor, float64(y)/i.scaleFactor
+	xf, yf := float32(x)/i.scaleFactor, float32(y)/i.scaleFactor
 
-	to_average := []mgl64.Vec2{
+	to_average := []mgl32.Vec2{
 		{xf + antialias, yf + antialias},
 		{xf + antialias, yf},
 		{xf + antialias, yf - antialias},
@@ -124,7 +128,7 @@ func (i *programImage) At(x, y int) color.Color {
 
 	avg := mgl32.Vec3{}
 	for _, pos := range to_average {
-		avg = avg.Add(i.getPixel(i.uniforms, pos[0], pos[1]))
+		avg = avg.Add(i.getPixel(i.uniforms, pos))
 	}
 	avg = avg.Mul(1 / float32(len(to_average)))
 
@@ -145,8 +149,10 @@ func (i *programImage) ColorModel() color.Model {
 }
 
 func (i *programImage) Progress() float64 {
-	// for some reason, PNG probes every pixel exactly twice,
-	// so we can get an accurate progress by counting up to 2*pixel count.
-	end := i.bounds.Dx() * i.bounds.Dy() * 2
+	end := i.bounds.Dx() * i.bounds.Dy()
 	return float64(i.count) / float64(end)
+}
+
+func (i *programImage) Opaque() bool {
+	return true
 }

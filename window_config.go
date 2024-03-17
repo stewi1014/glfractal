@@ -5,13 +5,17 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
 	"image/png"
+	"io"
 	"log"
 	"math/rand"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -138,7 +142,7 @@ func NewConfigWindow(
 		app:            app,
 		colourSeed:     time.Now().Unix(),
 		colourWalkRate: 0.3,
-		saveAntiAlias:  float64(1) / 3,
+		saveAntiAlias:  float32(1) / 3,
 		startingColour: mgl32.Vec3{
 			rand.Float32(),
 			rand.Float32(),
@@ -180,21 +184,21 @@ func NewConfigWindow(
 	g.Attach(seperator, 0, y, 4, 1)
 	y++
 
-	colourStartR, _ := gtk.SpinButtonNewWithRange(0, 1, 0.01)
+	colourStartR, _ := gtk.SpinButtonNewWithRange(0, 1, 0.06)
 	colourStartR.SetValue(float64(w.startingColour[0]))
 	colourStartR.Connect("value-changed", func(b *gtk.SpinButton) {
 		w.startingColour[0] = float32(b.GetValue())
 		w.generateColour()
 	})
 
-	colourStartG, _ := gtk.SpinButtonNewWithRange(0, 1, 0.01)
+	colourStartG, _ := gtk.SpinButtonNewWithRange(0, 1, 0.06)
 	colourStartG.SetValue(float64(w.startingColour[1]))
 	colourStartG.Connect("value-changed", func(b *gtk.SpinButton) {
 		w.startingColour[1] = float32(b.GetValue())
 		w.generateColour()
 	})
 
-	colourStartB, _ := gtk.SpinButtonNewWithRange(0, 1, 0.01)
+	colourStartB, _ := gtk.SpinButtonNewWithRange(0, 1, 0.06)
 	colourStartB.SetValue(float64(w.startingColour[2]))
 	colourStartB.Connect("value-changed", func(b *gtk.SpinButton) {
 		w.startingColour[2] = float32(b.GetValue())
@@ -336,26 +340,35 @@ func NewConfigWindow(
 	})
 	imageAntiAlias, _ := gtk.CheckButtonNewWithLabel("Antialias")
 	imageAntiAlias.SetActive(true)
-	w.saveAntiAlias = float64(1) / 3
+	w.saveAntiAlias = float32(1) / 3
 	imageAntiAlias.Connect("toggled", func(b *gtk.CheckButton) {
 		if b.GetActive() {
-			w.saveAntiAlias = float64(1) / 3
+			w.saveAntiAlias = float32(1) / 3
 		} else {
 			w.saveAntiAlias = 0
 		}
 	})
+	imageMultithread, _ := gtk.CheckButtonNewWithLabel("Multithread")
+	imageMultithread.SetTooltipText("Multithreading requires buffering entire image in memory")
+	imageMultithread.Connect("toggled", func(b *gtk.CheckButton) {
+		w.saveMultithread = b.GetActive()
+	})
 	g.Attach(label, 0, y, 1, 1)
 	g.Attach(saveButton, 1, y, 1, 1)
-	g.Attach(imageSizeChooser, 2, y, 1, 1)
-	g.Attach(imageAntiAlias, 3, y, 1, 1)
+	g.Attach(imageAntiAlias, 2, y, 1, 1)
+	g.Attach(imageMultithread, 3, y, 1, 1)
 	y++
-	label, _ = gtk.LabelNew("Width")
+	label, _ = gtk.LabelNew("Size")
 	g.Attach(label, 0, y, 1, 1)
-	g.Attach(widthEntry, 1, y, 3, 1)
-	y++
-	label, _ = gtk.LabelNew("Height")
-	g.Attach(label, 0, y, 1, 1)
-	g.Attach(heightEntry, 1, y, 3, 1)
+
+	b, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 10)
+	label, _ = gtk.LabelNew("x")
+	b.Add(widthEntry)
+	b.Add(label)
+	b.Add(heightEntry)
+
+	g.Attach(imageSizeChooser, 1, y, 1, 1)
+	g.Attach(b, 2, y, 2, 1)
 	y++
 
 	w.Add(g)
@@ -385,7 +398,8 @@ type ConfigWindow struct {
 
 	saveWidth, saveHeight int
 	saveName              string
-	saveAntiAlias         float64
+	saveAntiAlias         float32
+	saveMultithread       bool
 }
 
 func (w *ConfigWindow) realize(_ *gtk.ApplicationWindow) {
@@ -412,9 +426,82 @@ func (w *ConfigWindow) generateColour() {
 	w.sendMessage <- w.uniforms
 }
 
+func (w *ConfigWindow) encodeImage(writer io.Writer, img image.Image, ctx context.Context) error {
+	if !w.saveMultithread {
+		return png.Encode(writer, img)
+	}
+
+	buffered := bufferImage(img, ctx)
+	return png.Encode(writer, buffered)
+}
+
+func bufferImage(img image.Image, ctx context.Context) image.Image {
+	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+
+	imgBuff := imageBuffer{
+		bounds: image.Rect(0, 0, width, height),
+		buff:   make([]color.RGBA, width*height),
+	}
+
+	min, max := img.Bounds().Min, img.Bounds().Max
+	chunkSize := 50
+	var wg sync.WaitGroup
+
+	for chunkMin := min.X; chunkMin < max.X; chunkMin += chunkSize {
+		chunkMax := chunkMin + chunkSize
+		if chunkMax > max.X {
+			chunkMax = max.X
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i := (chunkMin - min.X) * height
+			for x := chunkMin; x < chunkMax; x++ {
+				if ctx.Err() != nil {
+					return
+				}
+
+				for y := min.Y; y < max.Y; y++ {
+					imgBuff.buff[i] = img.At(x, y).(color.RGBA)
+					i++
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	return imgBuff
+}
+
+type imageBuffer struct {
+	bounds image.Rectangle
+	buff   []color.RGBA
+}
+
+func (b imageBuffer) Bounds() image.Rectangle {
+	return b.bounds
+}
+
+func (b imageBuffer) At(x, y int) color.Color {
+	return b.buff[x*b.bounds.Max.Y+y]
+}
+
+func (b imageBuffer) ColorModel() color.Model {
+	return color.RGBAModel
+}
+
+func (b imageBuffer) Opaque() bool {
+	return false
+}
+
 func (w *ConfigWindow) save(pd *ProgressDialog) error {
+	ctx, done := context.WithCancel(context.Background())
+
 	image, err := w.program.GetImage(w.uniforms, w.saveWidth, w.saveHeight, w.saveAntiAlias)
 	if err != nil {
+		done()
 		return err
 	}
 
@@ -428,6 +515,7 @@ func (w *ConfigWindow) save(pd *ProgressDialog) error {
 
 	file, err := os.Create(name)
 	if err != nil {
+		done()
 		return err
 	}
 
@@ -438,20 +526,22 @@ func (w *ConfigWindow) save(pd *ProgressDialog) error {
 		if err != nil {
 			log.Println(err)
 		}
+		done()
 	})
 
-	done := false
 	go func() {
-		err := png.Encode(file, image)
-		if err != nil {
-			NewErrorDialog(w.ApplicationWindow, "Rendering Image", err)
+		err := w.encodeImage(file, image, ctx)
+		if err != nil && ctx.Err() == nil {
+			glib.IdleAdd(func() {
+				NewErrorDialog(w.ApplicationWindow, "Rendering Image", err)
+			})
 		}
 		file.Close()
-		done = true
+		done()
 	}()
 
 	glib.IdleAdd(func() bool {
-		if done {
+		if ctx.Err() != nil {
 			pd.Destroy()
 
 			previewWindow, err := gtk.ApplicationWindowNew(w.app)
