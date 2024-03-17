@@ -18,10 +18,11 @@ func init() {
 		getPixel: func(uniforms Uniforms, x, y float64) mgl32.Vec3 {
 			iterations := 0
 
+			c := complex(uniforms.Sliders[0]-0.8359375, uniforms.Sliders[1]+0.23046875)
 			z := complex(x*uniforms.Zoom-uniforms.Pos[0], y*uniforms.Zoom-uniforms.Pos[1])
 
 			for math.Abs(real(z))+math.Abs(imag(z)) <= 4 && iterations < int(uniforms.Iterations) {
-				z = z*z + complex(uniforms.Sliders[0]-0.835, uniforms.Sliders[1]+0.2321)
+				z = z*z + c
 				iterations++
 			}
 

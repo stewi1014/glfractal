@@ -19,9 +19,11 @@ dvec2 multiply(in dvec2 i, in dvec2 j) {
 void main() {
     dvec2 z = frag * zoom - pos;
 
+    dvec2 c = dvec2(sliders[0]-0.8359375,sliders[1]+0.23046875);
+
     uint iterations = 0;
     while (abs(z.x) + abs(z.y) <= 4 && iterations < max_iterations) {
-        z = multiply(z, z) + dvec2(sliders[0]-0.835,sliders[1]+0.2321);
+        z = multiply(z, z) + c;
         iterations++;
     }
 
