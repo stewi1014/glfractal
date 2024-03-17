@@ -205,6 +205,9 @@ func (w *RenderWindow) glaRealize(gla *gtk.GLArea) {
 	gl.BindBuffer(gl.ARRAY_BUFFER, w.vbo)
 	gl.BufferData(gl.ARRAY_BUFFER, len(verticies)*4, gl.Ptr(verticies), gl.STATIC_DRAW)
 
+	w.uniforms.DefaultValues()
+	w.resize(w.gla, w.width, w.height)
+
 	err = w.loadProgram(programs.GetProgram(0))
 	if err != nil {
 		w.quit(err)
@@ -220,7 +223,6 @@ func (w *RenderWindow) glaRender(gla *gtk.GLArea) {
 		gla.QueueDraw()
 	}
 
-	w.gla.AttachBuffers()
 	gl.Clear(gl.COLOR_BUFFER_BIT)
 	gl.UseProgram(w.program)
 	w.loadUniforms()
@@ -447,8 +449,6 @@ func (w *RenderWindow) loadProgram(program programs.Program) error {
 
 	w.uniformLocations = make(map[string]int32)
 	t := reflect.TypeOf(w.uniforms)
-	w.uniforms.DefaultValues()
-	w.resize(w.gla, w.width, w.height)
 	for i := 0; i < t.NumField(); i++ {
 		name := strings.ToLower(t.Field(i).Tag.Get("uniform"))
 		w.uniformLocations[name] = gl.GetUniformLocation(w.program, gl.Str(name+"\x00"))
@@ -459,8 +459,6 @@ func (w *RenderWindow) loadProgram(program programs.Program) error {
 	w.vertexAttrib = uint32(gl.GetAttribLocation(w.program, gl.Str("vert\x00")))
 	gl.EnableVertexAttribArray(w.vertexAttrib)
 	gl.VertexAttribPointerWithOffset(w.vertexAttrib, 2, gl.FLOAT, false, 2*4, 0)
-
-	w.sendMessage <- w.uniforms
 
 	return nil
 }

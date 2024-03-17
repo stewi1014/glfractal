@@ -349,7 +349,6 @@ func NewConfigWindow(
 
 	w.uniforms.DefaultValues()
 	w.generateColour()
-	w.sendMessage <- w.uniforms
 
 	return w
 }
@@ -473,7 +472,8 @@ func (w *ConfigWindow) handleReceive(conn net.Conn) {
 		switch msg := v.(type) {
 		case *programs.Uniforms:
 			glib.IdleAdd(func() {
-				w.uniforms = *msg
+				w.uniforms.Zoom = msg.Zoom
+				w.uniforms.Pos = msg.Pos
 			})
 			w.sendMessage <- skipClient{
 				msg:  *msg,
@@ -499,14 +499,22 @@ func (w *ConfigWindow) listen(listener net.Listener) {
 
 		for {
 			select {
-			case client := <-newClient:
-				clients[client.RemoteAddr()] = struct {
+			case conn := <-newClient:
+				client := struct {
 					conn net.Conn
 					enc  *gob.Encoder
 				}{
-					conn: client,
-					enc:  gob.NewEncoder(client),
+					conn: conn,
+					enc:  gob.NewEncoder(conn),
 				}
+
+				var msg interface{}
+				msg = w.uniforms
+				client.enc.Encode(&msg)
+				msg = w.program
+				client.enc.Encode(&msg)
+
+				clients[conn.RemoteAddr()] = client
 
 			case msg, ok := <-w.sendMessage:
 				if !ok {
