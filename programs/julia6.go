@@ -15,7 +15,7 @@ func init() {
 		Name:           "Julia (6th power)",
 		VertexShader:   defaultVertexShader,
 		FragmentShader: julia6Fragment,
-		getPixel: func(uniforms Uniforms, pos mgl32.Vec2) mgl32.Vec3 {
+		GetPixel: func(uniforms Uniforms, pos mgl32.Vec2) mgl32.Vec3 {
 			iterations := 0
 
 			z := complex(

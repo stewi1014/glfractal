@@ -171,7 +171,7 @@ func (w *RenderWindow) glaRealize(gla *gtk.GLArea) {
 	fmt.Println("OpenGL version", version)
 
 	gl.DebugMessageCallback(glDebugMessage, nil)
-	if debug {
+	if DEBUG {
 		gl.Enable(gl.DEBUG_OUTPUT)
 	}
 

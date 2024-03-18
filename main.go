@@ -15,7 +15,7 @@ import (
 	"github.com/stewi1014/glfractal/programs"
 )
 
-const debug = true
+const DEBUG = true
 
 //go:embed icon.ico
 var icon []byte
@@ -69,6 +69,8 @@ func gtkMain(ctx context.Context) error {
 	iconPixbuf, _ := gdk.PixbufNewFromBytesOnly(icon)
 
 	appContext, appQuit := context.WithCancelCause(ctx)
+	AttachErrorDialog(nil, appContext)
+
 	app.Connect("activate", func() {
 		clients, listener := NewPipeListener(1, appContext)
 

@@ -5,17 +5,13 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
 	"image/png"
-	"io"
 	"log"
 	"math/rand"
 	"net"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -77,56 +73,6 @@ func parseNumber(e *gtk.Entry) int {
 	}
 
 	return n
-}
-
-func NewErrorDialog(
-	parent *gtk.ApplicationWindow,
-	title string,
-	err error,
-) {
-	d, _ := gtk.DialogNewWithButtons(
-		title,
-		parent,
-		gtk.DIALOG_DESTROY_WITH_PARENT,
-		[]interface{}{"OK", gtk.RESPONSE_OK},
-	)
-	d.Connect("response", d.Destroy)
-
-	ca, _ := d.GetContentArea()
-	l, _ := gtk.LabelNew(err.Error())
-	ca.Add(l)
-	d.SetKeepAbove(true)
-	d.ShowAll()
-}
-
-func NewProgressDialog(
-	parent *gtk.ApplicationWindow,
-	title string,
-) *ProgressDialog {
-	pd := &ProgressDialog{}
-	pd.Dialog, _ = gtk.DialogNewWithButtons(
-		title,
-		parent,
-		gtk.DIALOG_DESTROY_WITH_PARENT,
-		[]interface{}{"CANCEL", gtk.RESPONSE_CANCEL},
-	)
-
-	ca, _ := pd.GetContentArea()
-	pd.l, _ = gtk.LabelNew("starting...")
-	ca.Add(pd.l)
-	pd.pb, _ = gtk.ProgressBarNew()
-	pd.pb.SetSizeRequest(500, 80)
-	ca.Add(pd.pb)
-	pd.SetKeepAbove(true)
-	pd.ShowAll()
-
-	return pd
-}
-
-type ProgressDialog struct {
-	*gtk.Dialog
-	pb *gtk.ProgressBar
-	l  *gtk.Label
 }
 
 func NewConfigWindow(
@@ -246,7 +192,7 @@ func NewConfigWindow(
 	y++
 
 	label, _ = gtk.LabelNew("Iterations")
-	iterationsButton, _ := gtk.SpinButtonNewWithRange(0, 10000, 1)
+	iterationsButton, _ := gtk.SpinButtonNewWithRange(0, 20000, 84)
 	iterationsButton.SetValue(500)
 	iterationsButton.Connect("value-changed", func(b *gtk.SpinButton) {
 		w.uniforms.Iterations = uint32(b.GetValueAsInt())
@@ -314,18 +260,7 @@ func NewConfigWindow(
 		w.saveHeight = parseNumber(e)
 	})
 	saveButton, _ := gtk.ButtonNewWithLabel("Save")
-	saveButton.Connect("clicked", func() {
-		pd := NewProgressDialog(
-			w.ApplicationWindow,
-			"Saving Image",
-		)
-
-		err := w.save(pd)
-		if err != nil {
-			NewErrorDialog(w.ApplicationWindow, "Save Error", err)
-			return
-		}
-	})
+	saveButton.Connect("clicked", w.save)
 	imageSizeChooser, _ := gtk.ComboBoxTextNew()
 	for _, preset := range imageSizePresets {
 		imageSizeChooser.AppendText(preset.name)
@@ -426,168 +361,130 @@ func (w *ConfigWindow) generateColour() {
 	w.sendMessage <- w.uniforms
 }
 
-func (w *ConfigWindow) encodeImage(writer io.Writer, img image.Image, ctx context.Context) error {
-	if !w.saveMultithread {
-		return png.Encode(writer, img)
-	}
-
-	buffered := bufferImage(img, ctx)
-	return png.Encode(writer, buffered)
-}
-
-func bufferImage(img image.Image, ctx context.Context) image.Image {
-	width, height := img.Bounds().Dx(), img.Bounds().Dy()
-
-	imgBuff := imageBuffer{
-		bounds: image.Rect(0, 0, width, height),
-		buff:   make([]color.RGBA, width*height),
-	}
-
-	min, max := img.Bounds().Min, img.Bounds().Max
-	chunkSize := 50
-	var wg sync.WaitGroup
-
-	for chunkMin := min.X; chunkMin < max.X; chunkMin += chunkSize {
-		chunkMax := chunkMin + chunkSize
-		if chunkMax > max.X {
-			chunkMax = max.X
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			i := (chunkMin - min.X) * height
-			for x := chunkMin; x < chunkMax; x++ {
-				if ctx.Err() != nil {
-					return
-				}
-
-				for y := min.Y; y < max.Y; y++ {
-					imgBuff.buff[i] = img.At(x, y).(color.RGBA)
-					i++
-				}
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	return imgBuff
-}
-
-type imageBuffer struct {
-	bounds image.Rectangle
-	buff   []color.RGBA
-}
-
-func (b imageBuffer) Bounds() image.Rectangle {
-	return b.bounds
-}
-
-func (b imageBuffer) At(x, y int) color.Color {
-	return b.buff[x*b.bounds.Max.Y+y]
-}
-
-func (b imageBuffer) ColorModel() color.Model {
-	return color.RGBAModel
-}
-
-func (b imageBuffer) Opaque() bool {
-	return false
-}
-
-func (w *ConfigWindow) save(pd *ProgressDialog) error {
-	ctx, done := context.WithCancel(context.Background())
-
-	image, err := w.program.GetImage(w.uniforms, w.saveWidth, w.saveHeight, w.saveAntiAlias)
-	if err != nil {
-		done()
-		return err
-	}
+func (w *ConfigWindow) save() {
+	saveContext, cancelSave := context.WithCancelCause(w.ctx)
+	defer CatchPanicToContext(cancelSave)
 
 	name := w.saveName
-
 	if name == "" {
 		name = w.getSaveName()
 	} else if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
 		name = w.getSaveName()
 	}
 
-	file, err := os.Create(name)
+	renderContext, renderDone := context.WithCancel(saveContext)
+	dialog, err := NewProgressDialog(
+		renderContext,
+		w.ApplicationWindow,
+		"Saving Image",
+		fmt.Sprintf("Saving %v", name),
+		func() {
+			cancelSave(context.Canceled)
+		},
+	)
+	dialog.ShowAll()
+
+	AttachErrorDialog(w.ApplicationWindow, saveContext)
+
 	if err != nil {
-		done()
-		return err
+		cancelSave(err)
+		return
 	}
 
-	pd.Connect("response", func() {
-		defer pd.Destroy()
-		file.Close()
-		err := os.Remove(file.Name())
-		if err != nil {
-			log.Println(err)
-		}
-		done()
-	})
+	// copy values
+	uniforms := w.uniforms
+	program := w.program
+	width, height := w.saveWidth, w.saveHeight
+	antiAlias := w.saveAntiAlias
+	multithreaded := w.saveMultithread
 
 	go func() {
-		err := w.encodeImage(file, image, ctx)
-		if err != nil && ctx.Err() == nil {
-			glib.IdleAdd(func() {
-				NewErrorDialog(w.ApplicationWindow, "Rendering Image", err)
-			})
+		defer CatchPanicToContext(cancelSave)
+		image, err := program.GetImage(uniforms, width, height)
+		if err != nil {
+			cancelSave(err)
+			return
 		}
-		file.Close()
-		done()
+
+		file, err := os.Create(name)
+		if err != nil {
+			cancelSave(err)
+			return
+		}
+		// delete by default
+		dontDelete := context.AfterFunc(saveContext, func() {
+			file.Close()
+			os.Remove(file.Name())
+		})
+
+		if antiAlias > 0 {
+			image = AntiAlias9x(image, antiAlias)
+		}
+
+		imageImage := ToImage(image)
+		dialog.AddProgressSupplier(WrapWithProgress(&imageImage))
+
+		if multithreaded {
+			buff := BufferImage(imageImage)
+			imageImage = buff
+
+			dialog.AddProgressSupplier(WrapWithProgress(&imageImage))
+			err := buff.Buffer(renderContext)
+			if err != nil {
+				cancelSave(err)
+				return
+			}
+		}
+
+		err = png.Encode(file, imageImage)
+		if err != nil {
+			cancelSave(err)
+			return
+		}
+
+		//We're done
+		err = file.Close()
+		if err != nil {
+			cancelSave(err)
+			return
+		}
+
+		renderDone()
+
+		width, height := getDisplaySize()
+		pixbuf, err := gdk.PixbufNewFromFileAtSize(name, int(float64(width)*.8), int(float64(height)*.8))
+		if err != nil {
+			// failed to load preview
+			// fail nicely by still saving the file
+			dontDelete()
+			NewErrorDialog(w.ApplicationWindow, err)
+			return
+		}
+
+		glib.IdleAdd(func() {
+			dialog, err := NewImageDialog(
+				w.app,
+				pixbuf,
+				func() {
+					dontDelete()
+					cancelSave(context.Canceled)
+				},
+				func() {
+					cancelSave(context.Canceled)
+				},
+			)
+			dialog.Connect("destroy", func() {
+				cancelSave(context.Canceled)
+			})
+			dialog.ShowAll()
+
+			if err != nil {
+				dontDelete()
+				NewErrorDialog(w.ApplicationWindow, err)
+				cancelSave(context.Canceled)
+			}
+		})
 	}()
-
-	glib.IdleAdd(func() bool {
-		if ctx.Err() != nil {
-			pd.Destroy()
-
-			previewWindow, err := gtk.ApplicationWindowNew(w.app)
-			if err != nil {
-				return false
-			}
-
-			width, height := getDisplaySize()
-			pixbuf, err := gdk.PixbufNewFromFileAtSize(name, int(float64(width)*.8), int(float64(height)*.8))
-			if err != nil {
-				return false
-			}
-
-			previewImage, err := gtk.ImageNewFromPixbuf(pixbuf)
-			if err != nil {
-				return false
-			}
-			previewImage.SetHExpand(true)
-			previewImage.SetVExpand(true)
-			previewImage.SetSizeRequest(1280, 720)
-
-			deleteButton, _ := gtk.ButtonNewWithLabel("Delete")
-			deleteButton.Connect("clicked", func(button *gtk.Button) {
-				err := os.Remove(name)
-				if err != nil {
-					NewErrorDialog(w.ApplicationWindow, "Deleting File", err)
-				}
-				previewWindow.Destroy()
-			})
-
-			grid, _ := gtk.GridNew()
-			grid.Attach(previewImage, 0, 0, 5, 1)
-			grid.Attach(deleteButton, 4, 1, 1, 1)
-
-			previewWindow.Add(grid)
-			previewWindow.ShowAll()
-
-			return false
-		}
-		progress := image.Progress()
-		pd.l.SetText(fmt.Sprintf("saving %v: %2.2f%%", file.Name(), progress*100))
-		pd.pb.SetFraction(image.Progress())
-		return true
-	})
-
-	return nil
 }
 
 type skipClient struct {
