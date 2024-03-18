@@ -1,9 +1,5 @@
 package main
 
-// #cgo pkg-config: gdk-3.0 glib-2.0 gobject-2.0
-// #include <gdk/gdk.h>
-import "C"
-
 import (
 	"context"
 	"fmt"
@@ -11,6 +7,7 @@ import (
 	"image/color"
 	"log"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -29,17 +26,17 @@ func WrapWithProgress(img *image.Image) func() float64 {
 
 type ProgressImage struct {
 	image.Image
-	count int
+	count atomic.Uint64
 }
 
 func (i *ProgressImage) At(x, y int) color.Color {
-	i.count++
+	i.count.Add(1)
 	return i.Image.At(x, y)
 }
 
 func (i *ProgressImage) Progress() float64 {
 	end := i.Bounds().Dx() * i.Bounds().Dy()
-	return float64(i.count) / float64(end)
+	return float64(i.count.Load()) / float64(end)
 }
 
 func (i *ProgressImage) Opaque() bool {
@@ -108,6 +105,8 @@ func (b *BufferedImage) At(x, y int) color.Color {
 
 func (b *BufferedImage) Buffer(ctx context.Context) error {
 	ctx, quit := context.WithCancelCause(ctx)
+	AttachErrorDialog(nil, ctx)
+
 	var err error
 	b.buff, err = gdk.PixbufNew(
 		gdk.COLORSPACE_RGB,
@@ -128,7 +127,11 @@ func (b *BufferedImage) Buffer(ctx context.Context) error {
 	b.asSlice = b.buff.GetPixels()
 
 	min, max := b.Image.Bounds().Min, b.Image.Bounds().Max
-	chunkSize := 50
+	chunkSize := 50 * 2000 / image.Black.Bounds().Dx()
+	if chunkSize == 0 {
+		chunkSize = 1
+	}
+
 	var wg sync.WaitGroup
 
 	for chunkMin := min.Y; chunkMin < max.Y; chunkMin += chunkSize {
@@ -142,12 +145,12 @@ func (b *BufferedImage) Buffer(ctx context.Context) error {
 			defer wg.Done()
 			defer CatchPanicToContext(quit)
 
+			if ctx.Err() != nil {
+				return
+			}
+
 			i := (chunkMin - min.Y) * b.rowstride
 			for y := chunkMin; y < chunkMax; y++ {
-				if ctx.Err() != nil {
-					return
-				}
-
 				for x := min.X; x < max.X; x++ {
 					c := b.Image.At(x, y)
 					if nrgba, ok := c.(color.NRGBA); ok {
@@ -166,6 +169,23 @@ func (b *BufferedImage) Buffer(ctx context.Context) error {
 
 func (i *BufferedImage) Opaque() bool {
 	return true
+}
+
+func (i *BufferedImage) Scale(dest *gdk.Pixbuf, width, height int, interpType gdk.InterpType) {
+	if i.buff == nil {
+		return
+	}
+
+	i.buff.Scale(
+		dest,
+		0, 0,
+		width,
+		height,
+		0, 0,
+		float64(dest.GetWidth())/float64(i.buff.GetWidth()),
+		float64(dest.GetHeight())/float64(i.buff.GetHeight()),
+		interpType,
+	)
 }
 
 func ToImage(img programs.Image) image.Image {

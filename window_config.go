@@ -3,20 +3,16 @@ package main
 import (
 	"context"
 	"encoding/gob"
-	"errors"
 	"fmt"
-	"image/png"
 	"log"
 	"math/rand"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/go-gl/mathgl/mgl64"
-	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
@@ -83,12 +79,10 @@ func NewConfigWindow(
 ) *ConfigWindow {
 	var err error
 	w := &ConfigWindow{
-		ctx:            ctx,
-		quit:           quit,
-		app:            app,
-		colourSeed:     time.Now().Unix(),
-		colourWalkRate: 0.3,
-		saveAntiAlias:  float32(1) / 3,
+		ctx:        ctx,
+		quit:       quit,
+		app:        app,
+		colourSeed: time.Now().Unix(),
 		startingColour: mgl32.Vec3{
 			rand.Float32(),
 			rand.Float32(),
@@ -171,6 +165,7 @@ func NewConfigWindow(
 	})
 	colourWalkRate, _ := gtk.SpinButtonNewWithRange(0, 1, 0.02)
 	colourWalkRate.SetValue(0.3)
+	w.colourWalkRate = 0.3
 	colourWalkRate.Connect("value-changed", func(b *gtk.SpinButton) {
 		w.colourWalkRate = float32(b.GetValue())
 		w.generateColour()
@@ -249,15 +244,15 @@ func NewConfigWindow(
 	defaultImageSize := 2
 	widthEntry, _ := gtk.EntryNew()
 	widthEntry.SetText(strconv.Itoa(imageSizePresets[defaultImageSize].width))
-	w.saveWidth = imageSizePresets[defaultImageSize].width
+	w.saveOpts.Width = imageSizePresets[defaultImageSize].width
 	widthEntry.Connect("changed", func(e *gtk.Entry) {
-		w.saveWidth = parseNumber(e)
+		w.saveOpts.Width = parseNumber(e)
 	})
 	heightEntry, _ := gtk.EntryNew()
 	heightEntry.SetText(strconv.Itoa(imageSizePresets[defaultImageSize].height))
-	w.saveHeight = imageSizePresets[defaultImageSize].height
+	w.saveOpts.Height = imageSizePresets[defaultImageSize].height
 	heightEntry.Connect("changed", func(e *gtk.Entry) {
-		w.saveHeight = parseNumber(e)
+		w.saveOpts.Height = parseNumber(e)
 	})
 	saveButton, _ := gtk.ButtonNewWithLabel("Save")
 	saveButton.Connect("clicked", w.save)
@@ -269,24 +264,26 @@ func NewConfigWindow(
 	imageSizeChooser.Connect("changed", func(c *gtk.ComboBoxText) {
 		imageSize := imageSizePresets[c.GetActive()]
 		widthEntry.SetText(strconv.Itoa(imageSize.width))
-		w.saveWidth = imageSize.width
+		w.saveOpts.Width = imageSize.width
 		heightEntry.SetText(strconv.Itoa(imageSize.height))
-		w.saveWidth = imageSize.width
+		w.saveOpts.Width = imageSize.width
 	})
 	imageAntiAlias, _ := gtk.CheckButtonNewWithLabel("Antialias")
 	imageAntiAlias.SetActive(true)
-	w.saveAntiAlias = float32(1) / 3
+	w.saveOpts.Antialias = float32(1) / 3
 	imageAntiAlias.Connect("toggled", func(b *gtk.CheckButton) {
 		if b.GetActive() {
-			w.saveAntiAlias = float32(1) / 3
+			w.saveOpts.Antialias = float32(1) / 3
 		} else {
-			w.saveAntiAlias = 0
+			w.saveOpts.Antialias = 0
 		}
 	})
-	imageMultithread, _ := gtk.CheckButtonNewWithLabel("Multithread")
-	imageMultithread.SetTooltipText("Multithreading requires buffering entire image in memory")
+	imageMultithread, _ := gtk.CheckButtonNewWithLabel("Multithread/Buffered")
+	imageMultithread.SetTooltipText("Disable if you have issues")
+	imageMultithread.SetActive(true)
+	w.saveOpts.Multithread = true
 	imageMultithread.Connect("toggled", func(b *gtk.CheckButton) {
-		w.saveMultithread = b.GetActive()
+		w.saveOpts.Multithread = b.GetActive()
 	})
 	g.Attach(label, 0, y, 1, 1)
 	g.Attach(saveButton, 1, y, 1, 1)
@@ -331,10 +328,7 @@ type ConfigWindow struct {
 	program     programs.Program
 	sendMessage chan interface{}
 
-	saveWidth, saveHeight int
-	saveName              string
-	saveAntiAlias         float32
-	saveMultithread       bool
+	saveOpts SaveOptions
 }
 
 func (w *ConfigWindow) realize(_ *gtk.ApplicationWindow) {
@@ -345,8 +339,8 @@ func (w *ConfigWindow) getSaveName() string {
 	return fmt.Sprintf(
 		"fractal_%v_%vx%v_%v.png",
 		w.program.Name,
-		w.saveWidth,
-		w.saveHeight,
+		w.saveOpts.Width,
+		w.saveOpts.Height,
 		rand.Intn(10000),
 	)
 }
@@ -362,129 +356,14 @@ func (w *ConfigWindow) generateColour() {
 }
 
 func (w *ConfigWindow) save() {
-	saveContext, cancelSave := context.WithCancelCause(w.ctx)
-	defer CatchPanicToContext(cancelSave)
-
-	name := w.saveName
-	if name == "" {
-		name = w.getSaveName()
-	} else if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
-		name = w.getSaveName()
-	}
-
-	renderContext, renderDone := context.WithCancel(saveContext)
-	dialog, err := NewProgressDialog(
-		renderContext,
+	w.saveOpts.Name = w.getSaveName()
+	save(
+		w.ctx,
 		w.ApplicationWindow,
-		"Saving Image",
-		fmt.Sprintf("Saving %v", name),
-		func() {
-			cancelSave(context.Canceled)
-		},
+		w.saveOpts,
+		w.program,
+		w.uniforms,
 	)
-	dialog.ShowAll()
-
-	AttachErrorDialog(w.ApplicationWindow, saveContext)
-
-	if err != nil {
-		cancelSave(err)
-		return
-	}
-
-	// copy values
-	uniforms := w.uniforms
-	program := w.program
-	width, height := w.saveWidth, w.saveHeight
-	antiAlias := w.saveAntiAlias
-	multithreaded := w.saveMultithread
-
-	go func() {
-		defer CatchPanicToContext(cancelSave)
-		image, err := program.GetImage(uniforms, width, height)
-		if err != nil {
-			cancelSave(err)
-			return
-		}
-
-		file, err := os.Create(name)
-		if err != nil {
-			cancelSave(err)
-			return
-		}
-		// delete by default
-		dontDelete := context.AfterFunc(saveContext, func() {
-			file.Close()
-			os.Remove(file.Name())
-		})
-
-		if antiAlias > 0 {
-			image = AntiAlias9x(image, antiAlias)
-		}
-
-		imageImage := ToImage(image)
-		dialog.AddProgressSupplier(WrapWithProgress(&imageImage))
-
-		if multithreaded {
-			buff := BufferImage(imageImage)
-			imageImage = buff
-
-			dialog.AddProgressSupplier(WrapWithProgress(&imageImage))
-			err := buff.Buffer(renderContext)
-			if err != nil {
-				cancelSave(err)
-				return
-			}
-		}
-
-		err = png.Encode(file, imageImage)
-		if err != nil {
-			cancelSave(err)
-			return
-		}
-
-		//We're done
-		err = file.Close()
-		if err != nil {
-			cancelSave(err)
-			return
-		}
-
-		renderDone()
-
-		width, height := getDisplaySize()
-		pixbuf, err := gdk.PixbufNewFromFileAtSize(name, int(float64(width)*.8), int(float64(height)*.8))
-		if err != nil {
-			// failed to load preview
-			// fail nicely by still saving the file
-			dontDelete()
-			NewErrorDialog(w.ApplicationWindow, err)
-			return
-		}
-
-		glib.IdleAdd(func() {
-			dialog, err := NewImageDialog(
-				w.app,
-				pixbuf,
-				func() {
-					dontDelete()
-					cancelSave(context.Canceled)
-				},
-				func() {
-					cancelSave(context.Canceled)
-				},
-			)
-			dialog.Connect("destroy", func() {
-				cancelSave(context.Canceled)
-			})
-			dialog.ShowAll()
-
-			if err != nil {
-				dontDelete()
-				NewErrorDialog(w.ApplicationWindow, err)
-				cancelSave(context.Canceled)
-			}
-		})
-	}()
 }
 
 type skipClient struct {

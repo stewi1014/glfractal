@@ -7,6 +7,7 @@ import (
 	"log"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/gotk3/gotk3/gdk"
@@ -27,7 +28,7 @@ func CatchPanicToContext(ctxCancel context.CancelCauseFunc) {
 	}
 }
 
-func WrapErrorDialog(parent *gtk.ApplicationWindow, failable func() error) func() {
+func WrapErrorDialog(parent gtk.IWindow, failable func() error) func() {
 	return func() {
 		err := failable()
 		if err != nil {
@@ -39,7 +40,7 @@ func WrapErrorDialog(parent *gtk.ApplicationWindow, failable func() error) func(
 	}
 }
 
-func AttachErrorDialog(parent *gtk.ApplicationWindow, ctx context.Context) {
+func AttachErrorDialog(parent gtk.IWindow, ctx context.Context) {
 	go func() {
 		<-ctx.Done()
 		err := context.Cause(ctx)
@@ -53,7 +54,7 @@ func AttachErrorDialog(parent *gtk.ApplicationWindow, ctx context.Context) {
 }
 
 func NewErrorDialog(
-	parent *gtk.ApplicationWindow,
+	parent gtk.IWindow,
 	err error,
 ) {
 	_, file, line, ok := runtime.Caller(1)
@@ -96,128 +97,260 @@ func NewErrorDialog(
 	dialog.Run()
 }
 
-func NewProgressDialog(
-	parentCtx context.Context,
-	parentWindow gtk.IWindow,
-	title string,
-	description string,
-	onCancel func(),
-) (*ProgressDialog, error) {
-	dialog := &ProgressDialog{}
-	dialog.Dialog, _ = gtk.DialogNewWithButtons(
-		title,
-		parentWindow,
-		gtk.DIALOG_DESTROY_WITH_PARENT,
-		[]interface{}{"CANCEL", gtk.RESPONSE_CANCEL},
-	)
-	dialog.SetKeepAbove(true)
-	dialog.Connect("response", func(dialog *gtk.Dialog, response gtk.ResponseType) {
-		if response == gtk.RESPONSE_CANCEL {
-			onCancel()
-		}
-	})
-
-	ca, _ := dialog.GetContentArea()
-	dialog.label, _ = gtk.LabelNew(description)
-	ca.Add(dialog.label)
-
-	dialog.progressBar, _ = gtk.ProgressBarNew()
-	dialog.progressBar.SetProperty("show-text", true)
-	dialog.progressBar.SetSizeRequest(500, 80)
-	ca.Add(dialog.progressBar)
-
-	go dialog.periodicUpdate(parentCtx)
-	return dialog, nil
+type ProgressBarWindow interface {
+	gtk.IWindow
+	AddProgressSupplier(context.Context, func() float64, string)
 }
 
-type ProgressDialog struct {
-	*gtk.Dialog
-	progressBar *gtk.ProgressBar
-	label       *gtk.Label
+func NewProgressBar(ctx context.Context) *ProgressBar {
+	bar := &ProgressBar{}
 
-	progressFuncs []func() float64
+	bar.progressBar, _ = gtk.ProgressBarNew()
+	bar.progressBar.SetProperty("show-text", true)
+
+	bar.label, _ = gtk.LabelNew("starting...")
+
+	return bar
 }
 
-// AddProgressSupplier adds a supplier for progress information to the ProgressDialog.
-// If more than one supplier is added, their values are averaged.
-func (dialog *ProgressDialog) AddProgressSupplier(supplier func() float64) {
+type progressSupplier struct {
+	description string
+	supplier    func() float64
+}
+
+type ProgressBar struct {
+	progressBar    *gtk.ProgressBar
+	label          *gtk.Label
+	suppliers      []progressSupplier
+	suppliersMutex sync.Mutex
+}
+
+func (dialog *ProgressBar) SetFinished(description string) {
+	dialog.suppliersMutex.Lock()
+	defer dialog.suppliersMutex.Unlock()
+	dialog.suppliers = nil
 	glib.IdleAdd(func() {
-		dialog.progressFuncs = append(dialog.progressFuncs, supplier)
+		dialog.progressBar.SetFraction(1)
+		dialog.label.SetText(description)
 	})
 }
 
-func (dialog *ProgressDialog) periodicUpdate(ctx context.Context) {
-	ticker := time.NewTicker(time.Second / 10)
+func (dialog *ProgressBar) AddProgressSupplier(ctx context.Context, supplier func() float64, description string) {
+	dialog.suppliersMutex.Lock()
+	defer dialog.suppliersMutex.Unlock()
+
+	if dialog.suppliers == nil {
+		go dialog.updateProgress(ctx)
+	}
+
+	dialog.suppliers = append(dialog.suppliers, progressSupplier{
+		supplier:    supplier,
+		description: description,
+	})
+}
+
+func (dialog *ProgressBar) updateProgress(ctx context.Context) {
+	ticker := time.NewTicker(time.Second / 30)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			glib.IdleAdd(func() {
-				progress := float64(0)
-				for _, progressFunc := range dialog.progressFuncs {
-					progress += progressFunc()
+			dialog.suppliersMutex.Lock()
+			if len(dialog.suppliers) == 0 {
+				dialog.suppliersMutex.Unlock()
+				continue
+			}
+
+			progress := float64(1)
+			description := ""
+			for i := 0; progress >= 1; i++ {
+				if i >= len(dialog.suppliers) {
+					description = "Finished"
+					break
 				}
-				progress = progress / float64(len(dialog.progressFuncs))
-				dialog.progressBar.SetFraction(progress)
-			})
-		case <-ctx.Done():
+				progress = dialog.suppliers[i].supplier()
+				description = dialog.suppliers[i].description
+			}
+			dialog.suppliersMutex.Unlock()
+
+			var wg sync.WaitGroup
+			wg.Add(1)
 			glib.IdleAdd(func() {
-				dialog.Destroy()
+				dialog.progressBar.SetFraction(progress)
+				dialog.label.SetText(description)
+				wg.Done()
 			})
+			wg.Wait()
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func NewImageDialog(
-	app *gtk.Application,
-	pixbuf *gdk.Pixbuf,
-	responseSave func(),
-	responseDelete func(),
-) (*ImagePreview, error) {
-	w := &ImagePreview{}
+func NewProgressBarDialog(
+	ctx context.Context,
+	window gtk.IWindow,
+	title string,
+	message string,
+	onCancel func(),
+) (*ProgressBarDialog, error) {
 	var err error
+	dialog := &ProgressBarDialog{}
 
-	w.ApplicationWindow, err = gtk.ApplicationWindowNew(app)
+	var buttons []interface{}
+	if onCancel != nil {
+		buttons = []interface{}{"Cancel", gtk.RESPONSE_CANCEL}
+	}
+
+	dialog.Dialog, err = gtk.DialogNewWithButtons(
+		title,
+		window,
+		gtk.DIALOG_DESTROY_WITH_PARENT,
+		buttons,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	previewImage, err := gtk.ImageNewFromPixbuf(pixbuf)
-	if err != nil {
-		return nil, err
-	}
-
-	previewImage.SetHExpand(true)
-	previewImage.SetVExpand(true)
-
-	deleteButton, _ := gtk.ButtonNewWithLabel("Delete")
-	deleteButton.Connect("clicked", func(button *gtk.Button) {
-		if responseDelete != nil {
-			responseDelete()
+	dialog.Connect("response", func(dialog *gtk.Dialog, response gtk.ResponseType) {
+		if response == gtk.RESPONSE_CANCEL {
+			onCancel()
+			dialog.Destroy()
 		}
-		w.Destroy()
 	})
 
-	saveButton, _ := gtk.ButtonNewWithLabel("Save")
-	saveButton.Connect("clicked", func(button *gtk.Button) {
-		if responseSave != nil {
-			responseSave()
-		}
-		w.Destroy()
+	dialog.ProgressBar = NewProgressBar(ctx)
+
+	content, _ := dialog.GetContentArea()
+	content.Add(dialog.label)
+	content.Add(dialog.progressBar)
+
+	dialog.ShowAll()
+	context.AfterFunc(ctx, func() {
+		glib.IdleAdd(func() {
+			dialog.Destroy()
+		})
 	})
-
-	grid, _ := gtk.GridNew()
-	grid.Attach(previewImage, 0, 0, 5, 1)
-	grid.Attach(saveButton, 0, 1, 1, 1)
-	grid.Attach(deleteButton, 4, 1, 1, 1)
-
-	w.Add(grid)
-
-	return w, nil
+	return dialog, nil
 }
 
-type ImagePreview struct {
+type ProgressBarDialog struct {
+	*gtk.Dialog
+	*ProgressBar
+}
+
+func NewImagePreviewWindow(
+	ctx context.Context,
+	app *gtk.Application,
+	title string,
+	onSave func(),
+	onDelete func(),
+) (*ImagePreviewWindow, error) {
+	var err error
+	window := &ImagePreviewWindow{}
+
+	window.ApplicationWindow, err = gtk.ApplicationWindowNew(app)
+	if err != nil {
+		return nil, err
+	}
+	window.SetTitle(title)
+	destroySignal := window.Connect("destroy", onDelete)
+
+	window.image, err = gtk.ImageNew()
+	if err != nil {
+		return nil, err
+	}
+
+	width, height := getDisplaySize()
+	window.image.SetSizeRequest(int(float64(width)*.8), int(float64(height)*.8))
+
+	saveButton, _ := gtk.ButtonNewWithLabel("Save")
+	saveButton.Connect("clicked", func() {
+		onSave()
+		window.HandlerDisconnect(destroySignal)
+		window.Destroy()
+	})
+
+	deleteButton, _ := gtk.ButtonNewWithLabel("Delete")
+	deleteButton.Connect("clicked", func() {
+		onDelete()
+		window.HandlerDisconnect(destroySignal)
+		window.Destroy()
+	})
+
+	window.ProgressBar = NewProgressBar(ctx)
+	window.progressBar.SetVExpand(false)
+
+	grid, _ := gtk.GridNew()
+	grid.Attach(window.image, 0, 0, 10, 1)
+	grid.Attach(saveButton, 0, 1, 1, 2)
+	grid.Attach(window.label, 1, 1, 8, 1)
+	grid.Attach(window.progressBar, 1, 2, 8, 1)
+	grid.Attach(deleteButton, 9, 1, 1, 2)
+	window.Add(grid)
+
+	window.ShowAll()
+	context.AfterFunc(ctx, func() {
+		glib.IdleAdd(func() {
+			window.Destroy()
+		})
+	})
+	return window, nil
+}
+
+type ImagePreviewWindow struct {
 	*gtk.ApplicationWindow
+	*ProgressBar
+	image *gtk.Image
+}
+
+func (window *ImagePreviewWindow) OpenImage(filename string) error {
+	pixbuf, err := gdk.PixbufNewFromFileAtSize(
+		filename,
+		window.image.GetAllocatedWidth(),
+		window.image.GetAllocatedHeight(),
+	)
+	if err != nil {
+		return err
+	}
+
+	window.image.SetFromPixbuf(pixbuf)
+	return nil
+}
+
+func (window *ImagePreviewWindow) SetImageSupplier(ctx context.Context, supplier func(dest *gdk.Pixbuf)) {
+	pixbuf, err := gdk.PixbufNew(
+		gdk.COLORSPACE_RGB,
+		true,
+		8,
+		window.image.GetAllocatedWidth(),
+		window.image.GetAllocatedHeight(),
+	)
+
+	if err != nil {
+		log.Println(err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		var wg sync.WaitGroup
+
+		for {
+			select {
+			case <-ticker.C:
+				supplier(pixbuf)
+				wg.Add(1)
+				glib.IdleAdd(func() {
+					window.image.SetFromPixbuf(pixbuf)
+					wg.Done()
+				})
+				wg.Wait()
+
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
