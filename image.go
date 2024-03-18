@@ -6,12 +6,15 @@ import "C"
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"log"
 	"sync"
+	"unsafe"
 
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/stewi1014/glfractal/programs"
 )
 
@@ -84,15 +87,15 @@ func (i *antialias9xImage) GetPixel(pos mgl32.Vec2) mgl32.Vec3 {
 
 func BufferImage(img image.Image) *BufferedImage {
 	return &BufferedImage{
-		Image:  img,
-		height: img.Bounds().Dy(),
+		Image: img,
 	}
 }
 
 type BufferedImage struct {
 	image.Image
-	height int
-	buff   []color.Color
+	rowstride int
+	buff      *gdk.Pixbuf
+	asSlice   []byte
 }
 
 func (b *BufferedImage) Bounds() image.Rectangle {
@@ -100,34 +103,57 @@ func (b *BufferedImage) Bounds() image.Rectangle {
 }
 
 func (b *BufferedImage) At(x, y int) color.Color {
-	return b.buff[x*b.height+y]
+	return (*color.NRGBA)(unsafe.Pointer(&b.asSlice[y*b.rowstride+x*4]))
 }
 
 func (b *BufferedImage) Buffer(ctx context.Context) error {
-	b.buff = make([]color.Color, b.Image.Bounds().Dx()*b.Image.Bounds().Dy())
+	ctx, quit := context.WithCancelCause(ctx)
+	var err error
+	b.buff, err = gdk.PixbufNew(
+		gdk.COLORSPACE_RGB,
+		true,
+		8,
+		b.Bounds().Dx(),
+		b.Bounds().Dy(),
+	)
+	if err != nil {
+		return err
+	}
+
+	if b.buff.GetNChannels() != 4 {
+		return fmt.Errorf("gdk.Pixbuf does not have 4 channels")
+	}
+
+	b.rowstride = b.buff.GetRowstride()
+	b.asSlice = b.buff.GetPixels()
 
 	min, max := b.Image.Bounds().Min, b.Image.Bounds().Max
 	chunkSize := 50
 	var wg sync.WaitGroup
 
-	for chunkMin := min.X; chunkMin < max.X; chunkMin += chunkSize {
+	for chunkMin := min.Y; chunkMin < max.Y; chunkMin += chunkSize {
 		chunkMax := chunkMin + chunkSize
-		if chunkMax > max.X {
-			chunkMax = max.X
+		if chunkMax > max.Y {
+			chunkMax = max.Y
 		}
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			i := (chunkMin - min.X) * b.Image.Bounds().Dy()
-			for x := chunkMin; x < chunkMax; x++ {
+			defer CatchPanicToContext(quit)
+
+			i := (chunkMin - min.Y) * b.rowstride
+			for y := chunkMin; y < chunkMax; y++ {
 				if ctx.Err() != nil {
 					return
 				}
 
-				for y := min.Y; y < max.Y; y++ {
-					b.buff[i] = b.Image.At(x, y)
-					i++
+				for x := min.X; x < max.X; x++ {
+					c := b.Image.At(x, y)
+					if nrgba, ok := c.(color.NRGBA); ok {
+						*(*color.NRGBA)(unsafe.Pointer(&b.asSlice[i])) = nrgba
+					}
+					i += 4
 				}
 			}
 		}()
