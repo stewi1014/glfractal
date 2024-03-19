@@ -96,6 +96,8 @@ func NewConfigWindow(
 	if err != nil {
 		quit(fmt.Errorf("gtk.ApplicationWindowNew: %w", err))
 	}
+	w.SetTitle("GLFractal Config")
+	w.SetIcon(iconPixbuf)
 	w.Connect("realize", w.realize)
 
 	g, _ := gtk.GridNew()
@@ -175,11 +177,39 @@ func NewConfigWindow(
 	g.Attach(colourSeedButton, 2, y, 1, 1)
 	g.Attach(colourStartButton, 3, y, 1, 1)
 	y++
-	label, _ = gtk.LabelNew("Start R,G,B")
+	label, _ = gtk.LabelNew("Start RGB")
 	g.Attach(label, 0, y, 1, 1)
 	g.Attach(colourStartR, 1, y, 1, 1)
 	g.Attach(colourStartG, 2, y, 1, 1)
 	g.Attach(colourStartB, 3, y, 1, 1)
+	y++
+
+	colourEmptyR, _ := gtk.SpinButtonNewWithRange(0, 1, 0.05)
+	colourEmptyR.SetValue(0.1)
+	colourEmptyR.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.uniforms.EmptyColour[0] = float32(b.GetValue())
+		w.sendMessage <- w.uniforms
+	})
+
+	colourEmptyG, _ := gtk.SpinButtonNewWithRange(0, 1, 0.05)
+	colourEmptyG.SetValue(0.1)
+	colourEmptyG.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.uniforms.EmptyColour[1] = float32(b.GetValue())
+		w.sendMessage <- w.uniforms
+	})
+
+	colourEmptyB, _ := gtk.SpinButtonNewWithRange(0, 1, 0.05)
+	colourEmptyB.SetValue(0.1)
+	colourEmptyB.Connect("value-changed", func(b *gtk.SpinButton) {
+		w.uniforms.EmptyColour[2] = float32(b.GetValue())
+		w.sendMessage <- w.uniforms
+	})
+
+	label, _ = gtk.LabelNew("Empty Space")
+	g.Attach(label, 0, y, 1, 1)
+	g.Attach(colourEmptyR, 1, y, 1, 1)
+	g.Attach(colourEmptyG, 2, y, 1, 1)
+	g.Attach(colourEmptyB, 3, y, 1, 1)
 	y++
 
 	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)

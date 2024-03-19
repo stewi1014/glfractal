@@ -49,6 +49,7 @@ type Uniforms struct {
 	Iterations   uint32           `uniform:"max_iterations"`
 	Sliders      [sliders]float64 `uniform:"sliders"`
 	Camera       mgl32.Mat4       `uniform:"camera"`
+	EmptyColour  mgl32.Vec3       `uniform:"empty_colour"`
 	ColourPallet ColourPallet     `uniform:"colour_pallet"`
 }
 
@@ -58,6 +59,7 @@ func (u *Uniforms) DefaultValues() {
 	u.Iterations = 500
 	u.Sliders = [sliders]float64{}
 	u.Camera = mgl32.Ident4()
+	u.EmptyColour = mgl32.Vec3{0.1, 0.1, 0.1}
 	u.ColourPallet = RandomColourPallet(
 		mgl32.Vec3{
 			rand.Float32(),

@@ -44,6 +44,8 @@ func NewRenderWindow(
 		quit(fmt.Errorf("gtk.ApplicationWindowNew: %w", err))
 		return nil
 	}
+	w.SetTitle("GLFractal Render")
+	w.SetIcon(iconPixbuf)
 
 	width, height := getDisplaySize()
 

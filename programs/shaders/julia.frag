@@ -9,6 +9,7 @@ out vec3 outputColor;
 uniform uint max_iterations;
 uniform dvec2 pos;
 uniform double zoom;
+uniform vec3 empty_colour;
 uniform vec3[COLOURS] colour_pallet;
 uniform double[SLIDERS] sliders;
 
@@ -28,7 +29,7 @@ void main() {
     }
 
     if (iterations == max_iterations) {
-        outputColor = vec3(0.1,0.1,0.1);
+        outputColor = empty_colour;
     } else {
         outputColor = colour_pallet[iterations%COLOURS];
     }

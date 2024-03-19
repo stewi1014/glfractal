@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -132,6 +133,12 @@ func (b *BufferedImage) Buffer(ctx context.Context) error {
 		chunkSize = 1
 	}
 
+	numThreads := int(float64(runtime.NumCPU()-1) * .9)
+	if numThreads < 1 {
+		numThreads = 1
+	}
+
+	threads := make(chan struct{}, numThreads)
 	var wg sync.WaitGroup
 
 	for chunkMin := min.Y; chunkMin < max.Y; chunkMin += chunkSize {
@@ -142,7 +149,8 @@ func (b *BufferedImage) Buffer(ctx context.Context) error {
 
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			threads <- struct{}{}
+			defer func() { <-threads; wg.Done() }()
 			defer CatchPanicToContext(quit)
 
 			if ctx.Err() != nil {

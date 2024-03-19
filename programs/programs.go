@@ -10,10 +10,6 @@ import (
 
 var ErrNoCPUImplementation = errors.New("fractal does not have a CPU implementation")
 
-var (
-	NullColour = mgl32.Vec3{0.1, 0.1, 0.1}
-)
-
 //go:embed default.vert
 var defaultVertexShader string
 

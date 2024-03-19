@@ -29,7 +29,7 @@ func init() {
 			}
 
 			if iterations == int(uniforms.Iterations) {
-				return NullColour
+				return uniforms.EmptyColour
 			} else {
 				return uniforms.ColourPallet[iterations%colours]
 			}

@@ -19,6 +19,7 @@ const DEBUG = true
 
 //go:embed icon.ico
 var icon []byte
+var iconPixbuf, _ = gdk.PixbufNewFromBytesOnly(icon)
 
 func getDisplaySize() (width, height int) {
 	width = 1280
@@ -66,8 +67,6 @@ func gtkMain(ctx context.Context) error {
 		return fmt.Errorf("gtk.ApplicationNew failed: %w", err)
 	}
 
-	iconPixbuf, _ := gdk.PixbufNewFromBytesOnly(icon)
-
 	appContext, appQuit := context.WithCancelCause(ctx)
 	AttachErrorDialog(nil, appContext)
 
@@ -78,15 +77,11 @@ func gtkMain(ctx context.Context) error {
 		configWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})
-		configWindow.SetTitle("GLFractal Config")
-		configWindow.SetIcon(iconPixbuf)
 
 		renderWindow := NewRenderWindow(app, clients[0], ctx, appQuit)
 		renderWindow.Connect("destroy", func() {
 			appQuit(nil)
 		})
-		renderWindow.SetTitle("GLFractal Render")
-		renderWindow.SetIcon(iconPixbuf)
 	})
 
 	go func() {

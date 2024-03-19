@@ -73,7 +73,7 @@ func NewErrorDialog(
 		fileLocation,
 		err.Error(),
 	)
-
+	dialog.SetIcon(iconPixbuf)
 	dialog.Connect("response", dialog.Destroy)
 
 	messageArea, err := dialog.GetMessageArea()
@@ -212,7 +212,7 @@ func NewProgressBarDialog(
 	if err != nil {
 		return nil, err
 	}
-
+	dialog.SetIcon(iconPixbuf)
 	dialog.Connect("response", func(dialog *gtk.Dialog, response gtk.ResponseType) {
 		if response == gtk.RESPONSE_CANCEL {
 			onCancel()
@@ -254,6 +254,7 @@ func NewImagePreviewWindow(
 	if err != nil {
 		return nil, err
 	}
+	window.SetIcon(iconPixbuf)
 	window.SetTitle(title)
 	destroySignal := window.Connect("destroy", onDelete)
 
