@@ -7,50 +7,101 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/go-gl/mathgl/mgl64"
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 	"github.com/stewi1014/glfractal/programs"
 )
 
-var imageSizePresets = []struct {
-	name   string
-	width  int
-	height int
-}{{
-	name:   "720p",
-	width:  1280,
-	height: 720,
-}, {
-	name:   "1080p",
-	width:  1920,
-	height: 1080,
-}, {
-	name:   "4K",
-	width:  3840,
-	height: 2160,
-}, {
-	name:   "8K",
-	width:  7680,
-	height: 4320,
-}, {
-	name:   "16K",
-	width:  15360,
-	height: 8640,
-}, {
-	name:   "32k",
-	width:  30720,
-	height: 17280,
-}, {
-	name:   "64K",
-	width:  61440,
-	height: 34560,
-}}
+type imageSizePreset struct {
+	name          string
+	width, height int
+}
+
+func getImageSizePresets() []imageSizePreset {
+	var imageSizePresets = []imageSizePreset{{
+		name:   "720p",
+		width:  1280,
+		height: 720,
+	}, {
+		name:   "WXGA",
+		width:  1366,
+		height: 768,
+	}, {
+		name:   "1080p",
+		width:  1920,
+		height: 1080,
+	}, {
+		name:   "1440p",
+		width:  2560,
+		height: 1440,
+	}, {
+		name:   "WQXGA",
+		width:  2560,
+		height: 1600,
+	}, {
+		name:   "4K",
+		width:  3840,
+		height: 2160,
+	}, {
+		name:   "WQUXGA",
+		width:  3840,
+		height: 2400,
+	}, {
+		name:   "5K",
+		width:  5120,
+		height: 2880,
+	}, {
+		name:   "8K",
+		width:  7680,
+		height: 4320,
+	}, {
+		name:   "16K",
+		width:  15360,
+		height: 8640,
+	}, {
+		name:   "32k",
+		width:  30720,
+		height: 17280,
+	}, {
+		name:   "64K",
+		width:  61440,
+		height: 34560,
+	}}
+
+	dm, err := gdk.DisplayManagerGet()
+	if err != nil {
+		log.Println(err)
+	} else {
+		for _, display := range *dm.ListDisplays() {
+			for i := 0; i < display.GetNMonitors(); i++ {
+				monitor, err := display.GetMonitor(i)
+				if err != nil {
+					continue
+				}
+
+				imageSizePresets = append(imageSizePresets, imageSizePreset{
+					name:   "Display " + monitor.GetManufacturer() + "" + monitor.GetModel(),
+					width:  monitor.GetGeometry().GetWidth() * monitor.GetScaleFactor(),
+					height: monitor.GetGeometry().GetHeight() * monitor.GetScaleFactor(),
+				})
+			}
+		}
+	}
+
+	slices.SortFunc(imageSizePresets, func(a, b imageSizePreset) int {
+		return a.width*a.height - b.width*b.height
+	})
+
+	return imageSizePresets
+}
 
 func parseNumber(e *gtk.Entry) int {
 	str, err := e.GetText()
@@ -269,6 +320,8 @@ func NewConfigWindow(
 	seperator, _ = gtk.SeparatorNew(gtk.ORIENTATION_HORIZONTAL)
 	g.Attach(seperator, 0, y, 4, 1)
 	y++
+
+	imageSizePresets := getImageSizePresets()
 
 	label, _ = gtk.LabelNew("Image Render")
 	defaultImageSize := 2
