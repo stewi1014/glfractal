@@ -81,16 +81,26 @@ func getImageSizePresets() []imageSizePreset {
 		log.Println(err)
 	} else {
 		for _, display := range *dm.ListDisplays() {
+		NextMonitor:
 			for i := 0; i < display.GetNMonitors(); i++ {
 				monitor, err := display.GetMonitor(i)
 				if err != nil {
 					continue
 				}
 
+				width := monitor.GetGeometry().GetWidth() * monitor.GetScaleFactor()
+				height := monitor.GetGeometry().GetHeight() * monitor.GetScaleFactor()
+
+				for _, preset := range imageSizePresets {
+					if preset.width == width && preset.height == height {
+						continue NextMonitor
+					}
+				}
+
 				imageSizePresets = append(imageSizePresets, imageSizePreset{
 					name:   "Display " + monitor.GetManufacturer() + "" + monitor.GetModel(),
-					width:  monitor.GetGeometry().GetWidth() * monitor.GetScaleFactor(),
-					height: monitor.GetGeometry().GetHeight() * monitor.GetScaleFactor(),
+					width:  width,
+					height: height,
 				})
 			}
 		}
