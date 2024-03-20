@@ -67,8 +67,7 @@ func gtkMain(ctx context.Context) error {
 		return fmt.Errorf("gtk.ApplicationNew failed: %w", err)
 	}
 
-	appContext, appQuit := context.WithCancelCause(ctx)
-	AttachErrorDialog(nil, appContext)
+	appContext, appQuit := WithErrorDialogCancelCause(nil, ctx)
 
 	app.Connect("activate", func() {
 		clients, listener := NewPipeListener(1, appContext)

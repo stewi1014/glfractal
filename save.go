@@ -27,8 +27,7 @@ func save(
 	uniforms programs.Uniforms,
 ) {
 	var err error
-	ctx, cancel := context.WithCancelCause(ctx)
-	AttachErrorDialog(window, ctx)
+	ctx, cancel := WithErrorDialogCancelCause(window, ctx)
 	defer CatchPanicToContext(cancel)
 
 	file, err := os.Create(opts.Name)

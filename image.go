@@ -105,8 +105,7 @@ func (b *BufferedImage) At(x, y int) color.Color {
 }
 
 func (b *BufferedImage) Buffer(ctx context.Context) error {
-	ctx, quit := context.WithCancelCause(ctx)
-	AttachErrorDialog(nil, ctx)
+	ctx, quit := WithErrorDialogCancelCause(nil, ctx)
 
 	var err error
 	b.buff, err = gdk.PixbufNew(

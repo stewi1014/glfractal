@@ -28,73 +28,64 @@ func CatchPanicToContext(ctxCancel context.CancelCauseFunc) {
 	}
 }
 
-func WrapErrorDialog(parent gtk.IWindow, failable func() error) func() {
-	return func() {
-		err := failable()
-		if err != nil {
-			log.Println(err)
-			glib.IdleAdd(func() {
-				NewErrorDialog(parent, err)
-			})
-		}
-	}
-}
+func WithErrorDialogCancelCause(window gtk.IWindow, ctx context.Context) (context.Context, context.CancelCauseFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
 
-func AttachErrorDialog(parent gtk.IWindow, ctx context.Context) {
-	go func() {
-		<-ctx.Done()
-		err := context.Cause(ctx)
+	return ctx, func(err error) {
+		cancel(err)
+		err = context.Cause(ctx)
 		if !errors.Is(err, context.Canceled) {
 			log.Println(err)
-			glib.IdleAdd(func() {
-				NewErrorDialog(parent, err)
-			})
+			NewErrorDialog(window, err, 1)
 		}
-	}()
+	}
 }
 
 func NewErrorDialog(
 	parent gtk.IWindow,
 	err error,
+	traceSkip int,
 ) {
-	_, file, line, ok := runtime.Caller(1)
+	_, file, line, ok := runtime.Caller(traceSkip + 1)
 
 	fileLocation := "unknown file"
 	if ok {
 		fileLocation = fmt.Sprintf("%s:%v", file, line)
 	}
 
-	dialog := gtk.MessageDialogNew(
-		parent,
-		gtk.DIALOG_DESTROY_WITH_PARENT,
-		gtk.MESSAGE_ERROR,
-		gtk.BUTTONS_CLOSE,
-		"Error in %s: %s",
-		fileLocation,
-		err.Error(),
-	)
-	dialog.SetIcon(iconPixbuf)
-	dialog.Connect("response", dialog.Destroy)
+	glib.IdleAdd(func() {
+		dialog := gtk.MessageDialogNew(
+			parent,
+			gtk.DIALOG_DESTROY_WITH_PARENT,
+			gtk.MESSAGE_ERROR,
+			gtk.BUTTONS_CLOSE,
+			"Error in %s: %s",
+			fileLocation,
+			err.Error(),
+		)
+		dialog.SetIcon(iconPixbuf)
+		dialog.Connect("response", dialog.Destroy)
 
-	messageArea, err := dialog.GetMessageArea()
-	if err != nil {
-		log.Println(err)
+		messageArea, err := dialog.GetMessageArea()
+		if err != nil {
+			log.Println(err)
 
-	} else {
-		messageArea.GetChildren().Foreach(func(item interface{}) {
-			if widget, ok := item.(*gtk.Widget); ok {
-				l, err := gtk.WidgetToLabel(widget)
-				if err != nil {
-					return
+		} else {
+			messageArea.GetChildren().Foreach(func(item interface{}) {
+				if widget, ok := item.(*gtk.Widget); ok {
+					l, err := gtk.WidgetToLabel(widget)
+					if err != nil {
+						return
+					}
+
+					l.SetSelectable(true)
 				}
+			})
+		}
 
-				l.SetSelectable(true)
-			}
-		})
-	}
-
-	dialog.SetKeepAbove(true)
-	dialog.Run()
+		dialog.SetKeepAbove(true)
+		dialog.Run()
+	})
 }
 
 type ProgressBarWindow interface {
