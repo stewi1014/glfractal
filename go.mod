@@ -8,4 +8,4 @@ require (
 	github.com/gotk3/gotk3 v0.6.3
 )
 
-require golang.org/x/image v0.0.0-20190321063152-3fc05d484e9f // indirect
+require golang.org/x/image v0.15.0 // indirect
